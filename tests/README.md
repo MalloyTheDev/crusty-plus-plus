@@ -2,19 +2,24 @@
 
 The CRusty++ conformance test suite.
 
-**Status: M1 harness in place.**
+**Status: M1 + M2A harnesses in place.**
 
-- [`m1_hello.py`](./m1_hello.py) — the M1 acceptance test. Compiles
+- [`m1_hello.py`](./m1_hello.py) — M1 acceptance test. Compiles
   [`../examples/hello.crust`](../examples/hello.crust) end-to-end and asserts:
-  (1) emitted C matches the golden file, (2) it builds with the system C
-  compiler, (3) stdout is exactly `Hello, CRusty++!\n`, (4) exit code is `0`.
-- [`golden/hello.c`](./golden/hello.c) — golden generated C for the codegen
-  stability check.
+  (1) emitted C matches the golden, (2) it builds with the system C compiler,
+  (3) stdout is exactly `Hello, CRusty++!\n`, (4) exit code is `0`.
+- [`m2a_structs.py`](./m2a_structs.py) — M2A acceptance test. Compiles
+  [`../examples/m2_structs.crust`](../examples/m2_structs.crust) end-to-end and
+  asserts: (1) emitted C matches the golden, (2) it builds, (3) no stdout,
+  (4) exit code is `0`.
+- [`golden/hello.c`](./golden/hello.c), [`golden/m2_structs.c`](./golden/m2_structs.c)
+  — golden generated C for the codegen stability checks.
 
-Run it:
+Run them:
 
 ```sh
 python3 tests/m1_hello.py
+python3 tests/m2a_structs.py
 ```
 
 The broader category layout below is the plan for M2+; only the `examples`

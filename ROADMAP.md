@@ -26,7 +26,12 @@ conform. **No compiler code is written before this phase closes.**
 - [x] **M1 — `hello.crust` end-to-end to C.** Lexer, parser, type checker, and C
       emitter for the M1 subset; builds and runs; `tests/m1_hello.py` passes.
       Compiler implemented in Python 3 (stdlib only).
-- [ ] M2 — structs, integer arithmetic, context-typed literals (no I/O).
+- [x] **M2A — plain structs + local computation.** Structs, struct literals,
+      field access, `let` bindings, integer arithmetic → `examples/m2_structs.crust`;
+      `tests/m2a_structs.py` passes. (Checked arithmetic deferred — see
+      `compiler/README.md`.)
+- [ ] M2B — function parameters/calls, `if`/`else`, `while`/`loop`, remaining
+      integer types and casts, checked arithmetic. (No I/O.)
 - [ ] M3 — slices (`str`, `[]u8`), `Result`/`Option`, `?`, prelude → compile
       `file_read.crust` and `crust_inspect.crust`.
 - [ ] Type checker for the full `v0.1` type set

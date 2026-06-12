@@ -110,13 +110,27 @@ undefined construct.
   FREEZE-CANDIDATE until the first milestone validates the C lowering).
 - **Compiler prototype: MAY START — milestone 1 only.**
 
-### First compiler milestone (authorized) — ✅ DONE
+### Implemented milestones
 
-**M1 — `hello.crust` end-to-end to C.** Implemented in `compiler/crustc.py`
+**M1 — `hello.crust` end-to-end to C.** ✅ Implemented in `compiler/crustc.py`
 (Python 3, stdlib only): lexer → parser → type checker → portable-C emitter.
-`tests/m1_hello.py` compiles, builds via the system C compiler, runs, and asserts
-stdout `Hello, CRusty++!` and exit `0`. Resolved open question F1 (implementation
+`tests/m1_hello.py` builds via the system C compiler, runs, and asserts stdout
+`Hello, CRusty++!` and exit `0`. Resolved open question F1 (implementation
 language = Python 3).
+
+**M2A — plain structs + local computation.** ✅ Structs, struct literals, field
+access, `let` bindings (annotations still mandatory per `v0.1.md` §2.3; the
+checker infers the initializer type and validates it against the annotation), and
+`+ - * /` integer arithmetic. Target `examples/m2_structs.crust`;
+`tests/m2a_structs.py` passes (exit `0`). New diagnostics CRX0020–CRX0028.
+
+> **Tracked impl gap (not a spec defect): checked arithmetic.** M2A lowers
+> arithmetic to plain C operators. `v0.1.md` §8 / `error-handling.md` §5 require
+> overflow, div-by-zero, and negation/division overflow to `panic`. That lowering
+> (an abort shim + overflow checks) is **deferred** to the milestone that adds the
+> remaining integer types and casts (M2B). The M2A example does not overflow, so
+> its observable behavior is conformant. This gap must close before v0.1 is
+> declared fully implemented.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

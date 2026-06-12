@@ -2,10 +2,16 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestone M1 implemented.** `crustc.py` compiles the strict M1 subset
-(just enough for [`../examples/hello.crust`](../examples/hello.crust)) end-to-end
-to portable C. Everything beyond M1 is intentionally rejected with a diagnostic,
-not parsed — the compiler never accepts more than the spec defines.
+**Status: milestones M1 + M2A implemented.** `crustc.py` compiles the strict
+M1+M2A subset end-to-end to portable C:
+
+- **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
+  return.
+- **M2A** — [`../examples/m2_structs.crust`](../examples/m2_structs.crust): plain
+  structs, struct literals, field access, `let` bindings, integer arithmetic.
+
+Everything beyond this subset is intentionally rejected with a diagnostic, not
+parsed — the compiler never accepts more than the spec defines.
 
 - **Implementation language:** Python 3 (standard library only; no dependencies).
 - **Backend:** emits portable C, then invokes the system C compiler (`$CC`, or
@@ -15,37 +21,55 @@ not parsed — the compiler never accepts more than the spec defines.
 
 ```sh
 # Emit C to stdout:
-python3 compiler/crustc.py examples/hello.crust
+python3 compiler/crustc.py examples/m2_structs.crust
 
-# Emit C to a file:
-python3 compiler/crustc.py examples/hello.crust --emit-c build/hello.c
+# Emit C to a file / build / build-and-run:
+python3 compiler/crustc.py examples/m2_structs.crust --emit-c build/m2.c
+python3 compiler/crustc.py examples/m2_structs.crust --build build/m2
+python3 compiler/crustc.py examples/m2_structs.crust --run
 
-# Build an executable via the system C compiler:
-python3 compiler/crustc.py examples/hello.crust --build build/hello
-
-# Build and run:
-python3 compiler/crustc.py examples/hello.crust --run
-
-# Full M1 acceptance check (golden C + build + run + stdout/exit assertions):
+# Acceptance checks (golden C + build + run + stdout/exit assertions):
 python3 tests/m1_hello.py
+python3 tests/m2a_structs.py
 ```
 
-## M1 grammar (exactly what `crustc` accepts today)
+## Grammar (exactly what `crustc` accepts today)
 
 ```
-program   = function+                         ; must contain exactly `main`
-function  = "fn" "main" "(" ")" "->" "i32" block
-block     = "{" statement* "}"
-statement = call_stmt | return_stmt
-call_stmt = "println" "(" string_lit ")" ";"
-return_stmt = "return" int_lit ";"
+program     = item+                           ; must contain exactly `main`
+item        = struct_decl | function
+struct_decl = "struct" ident "{" sfields? "}"
+sfields     = sfield ("," sfield)* ","?
+sfield      = ident ":" type                  ; M2A field types: i32 only
+function    = "fn" "main" "(" ")" "->" "i32" block
+block       = "{" statement* "}"
+statement   = let_stmt | return_stmt | call_stmt
+let_stmt    = "let" "mut"? ident ":" type "=" expr ";"
+return_stmt = "return" expr ";"
+call_stmt   = "println" "(" string_lit ")" ";"   ; M1 carry-over
+expr        = add
+add         = mul (("+" | "-") mul)*
+mul         = postfix (("*" | "/") postfix)*
+postfix     = primary ("." ident)*            ; field access
+primary     = int_lit | string_lit | "(" expr ")"
+            | ident                            ; variable
+            | ident "{" finits? "}"            ; struct literal
+finits      = ident ":" expr ("," ident ":" expr)* ","?
+type        = "i32" | <declared struct name>
 ```
 
-This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Parameters,
-operators, variables, structs, slices, `Result`/`Option`, and any function other
-than `main` are rejected (see Diagnostics below). They arrive in later milestones
-(see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2
+This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
+parameters, `if`/loops, `%` and unary operators, slices, `Result`/`Option`, `?`,
+struct-typed fields, integer types other than `i32`, and any function other than
+`main` are **rejected** (see Diagnostics). `mut` is parsed but has no effect yet
+(no assignment statement exists). They arrive in later milestones (see
+[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2B
 recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+
+> **Known deferral:** M2A lowers arithmetic to **plain** C operators. The
+> spec-defined *checked* arithmetic (overflow / div-by-zero → `panic`) is not yet
+> implemented; it is a tracked gap for a later milestone. The M2A example does
+> not overflow, so its behavior is correct.
 
 ## Pipeline
 
@@ -53,13 +77,13 @@ recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
 source (.crust)
    │  lexer        → tokens          (crustc.py: tokenize)
    │  parser       → AST             (crustc.py: Parser)
-   │  type checker → validated AST   (crustc.py: check)
+   │  type checker → validated AST   (crustc.py: Checker)
    │  C emitter    → portable C      (crustc.py: emit_c)
    ▼
 C source  →  system C compiler  →  executable
 ```
 
-## Diagnostic codes (M1)
+## Diagnostic codes
 
 | Code | Meaning |
 |------|---------|
@@ -68,10 +92,19 @@ C source  →  system C compiler  →  executable
 | `CRX0003` | parse error (expected token X) |
 | `CRX0010` | program has no `main` |
 | `CRX0011` | invalid `main` signature / missing `i32` return |
-| `CRX0012` | unknown function (only `println` exists in M1) |
+| `CRX0012` | unknown function (only `println` exists) |
 | `CRX0013` | wrong argument count |
-| `CRX0014` | type mismatch (argument or return) |
-| `CRX0015` | construct not supported in M1 (params, variables, extra fns, …) |
+| `CRX0014` | type mismatch (argument, return, `let`, or struct field init) |
+| `CRX0015` | construct not supported yet (params, struct-typed fields, …) |
+| `CRX0020` | duplicate struct field (declaration) |
+| `CRX0021` | unknown type (in a type annotation or field type) |
+| `CRX0022` | unknown struct type (in a struct literal) |
+| `CRX0023` | missing struct field (in a struct literal) |
+| `CRX0024` | extra / duplicate struct field (in a struct literal) |
+| `CRX0025` | unknown field access |
+| `CRX0026` | field access on a non-struct value |
+| `CRX0027` | unknown variable |
+| `CRX0028` | invalid arithmetic operand type (non-`i32`) |
 
 ---
 

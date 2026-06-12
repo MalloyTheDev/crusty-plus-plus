@@ -1,0 +1,22 @@
+// m2_structs.crust
+//
+// M2A target program: plain data structs, struct literals, field access,
+// `let` bindings, and integer arithmetic — no I/O, no control flow, no loops.
+//
+// v0.1 has no integer-to-text formatting, so the program reports its result
+// through the process exit code.
+//
+// Expected behavior: computes ((3 + 4) * 2) - 14 == 0 and returns it, so the
+//                    process exits with code 0.
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() -> i32 {
+    let p: Point = Point { x: 3, y: 4 };
+    let sum: i32 = p.x + p.y;          // 7
+    let scaled: i32 = sum * 2 - 14;    // ((7 * 2) - 14) == 0
+    return scaled;
+}
