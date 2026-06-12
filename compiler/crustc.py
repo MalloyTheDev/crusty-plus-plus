@@ -78,7 +78,7 @@ KEYWORDS = {
 }
 
 # Single-character punctuation the implemented grammar can encounter.
-PUNCT = set("(){};:,.=+-*/<>")
+PUNCT = set("(){}[];:,.=+-*/<>")
 
 # Two-character tokens, checked before single-character punctuation.
 TWO_CHAR = {"->", "==", "!=", "<=", ">="}
@@ -430,6 +430,13 @@ class Parser:
         return Program(first.line, first.col, structs, funcs)
 
     def parse_type(self, *, what: str) -> Token:
+        # Slice type: `[]elem` (M3A supports only `[]u8`; others are rejected by
+        # the type checker as unknown types).
+        if self.at_punct("["):
+            lb = self.advance()
+            self.expect("punct", "]", what="`]`")
+            elem = self.expect("ident", what="a slice element type")
+            return Token("type", f"[]{elem.value}", lb.line, lb.col)
         return self.expect("ident", what=what)
 
     def parse_struct_decl(self) -> StructDecl:
@@ -695,6 +702,9 @@ class Parser:
 I32 = "i32"
 BOOL = "bool"
 UNIT = "()"
+STR = "str"
+SLICE_U8 = "[]u8"
+SLICE_TYPES = {STR, SLICE_U8}  # built-in fat slices (ptr + len)
 
 SIGNED_TYPES = {"i8", "i16", "i32", "i64"}
 UNSIGNED_TYPES = {"u8", "u16", "u32", "u64", "usize"}
@@ -791,7 +801,11 @@ class Checker:
             self.structs[decl.name] = decl
         for decl in self.program.structs:
             for fld in decl.fields:
-                if fld.type_name in NUMERIC_TYPES or fld.type_name == BOOL:
+                if (
+                    fld.type_name in NUMERIC_TYPES
+                    or fld.type_name == BOOL
+                    or fld.type_name in SLICE_TYPES
+                ):
                     continue
                 if fld.type_name in self.structs:
                     raise Diagnostic(
@@ -800,7 +814,7 @@ class Checker:
                         self.path,
                         fld.line,
                         fld.col,
-                        "struct fields must be a numeric type or `bool`",
+                        "struct fields must be numeric, `bool`, `str`, or `[]u8`",
                     )
                 raise Diagnostic(
                     "CRX0021",
@@ -808,7 +822,7 @@ class Checker:
                     self.path,
                     fld.line,
                     fld.col,
-                    "struct field types must be a numeric type or `bool`",
+                    "struct field types must be numeric, `bool`, `str`, or `[]u8`",
                 )
 
     def check_main(self) -> Func:
@@ -985,7 +999,7 @@ class Checker:
             self.check_block(stmt.else_branch)
 
     def resolve_type(self, name: str, line: int, col: int) -> str:
-        if name in NUMERIC_TYPES or name == BOOL:
+        if name in NUMERIC_TYPES or name == BOOL or name in SLICE_TYPES:
             return name
         if name in self.structs:
             return name
@@ -995,7 +1009,7 @@ class Checker:
             self.path,
             line,
             col,
-            "known types: the integer types, `bool`, and declared struct types",
+            "known types: integers, `bool`, `str`, `[]u8`, and declared structs",
         )
 
     def check_let(self, stmt: Let) -> None:
@@ -1182,6 +1196,19 @@ class Checker:
             return self.scope[expr.name][0]
         if isinstance(expr, FieldAccess):
             obj_type = self.synth(expr.obj)
+            # Built-in `.len` on the fat-slice types (precedes any struct lookup;
+            # `str`/`[]u8` are not user structs).
+            if obj_type in SLICE_TYPES:
+                if expr.field_name == "len":
+                    return "usize"
+                raise Diagnostic(
+                    "CRX0025",
+                    f"`{obj_type}` has no field `{expr.field_name}` "
+                    f"(only `.len` is available)",
+                    self.path,
+                    expr.line,
+                    expr.col,
+                )
             if obj_type not in self.structs:
                 raise Diagnostic(
                     "CRX0026",
@@ -1211,13 +1238,7 @@ class Checker:
         if isinstance(expr, StructLit):
             return self.synth_struct_lit(expr)
         if isinstance(expr, StrLit):
-            raise Diagnostic(
-                "CRX0015",
-                "string values are only supported as `println` arguments yet",
-                self.path,
-                expr.line,
-                expr.col,
-            )
+            return STR
         if isinstance(expr, Call):
             self.check_println(expr)
             return UNIT
@@ -1540,29 +1561,45 @@ def gen_helper(op: str, t: str) -> str:
     )
 
 
+CRX_STR_DEF = "typedef struct { const char *ptr; size_t len; } crx_str;"
+CRX_SLICE_U8_DEF = "typedef struct { const uint8_t *ptr; size_t len; } crx_slice_u8;"
+
+
 def c_type(t: str) -> str:
     if t in C_TYPE:
         return C_TYPE[t]
     if t == BOOL:
         return "bool"
+    if t == STR:
+        return "crx_str"
+    if t == SLICE_U8:
+        return "crx_slice_u8"
     return t  # struct name -> its typedef
 
 
+def str_byte_len(value: str) -> int:
+    """Byte length of a `str` value: its UTF-8 encoding, escapes counted as the
+    single bytes they decode to."""
+    return len(value.encode("utf-8"))
+
+
 def c_string_literal(value: str) -> str:
+    # Iterate over UTF-8 bytes so the emitted C literal's byte length matches
+    # `str_byte_len`. ASCII text (and the \n \t \\ \" escapes) is unaffected.
     out = ['"']
-    for ch in value:
-        if ch == "\\":
+    for b in value.encode("utf-8"):
+        if b == 0x5C:  # backslash
             out.append("\\\\")
-        elif ch == '"':
+        elif b == 0x22:  # double quote
             out.append('\\"')
-        elif ch == "\n":
+        elif b == 0x0A:  # newline
             out.append("\\n")
-        elif ch == "\t":
+        elif b == 0x09:  # tab
             out.append("\\t")
-        elif 32 <= ord(ch) < 127:
-            out.append(ch)
+        elif 32 <= b < 127:
+            out.append(chr(b))
         else:
-            out.append(f"\\x{ord(ch):02x}")
+            out.append(f"\\{b:03o}")  # octal escape: unambiguous, fixed length
     out.append('"')
     return "".join(out)
 
@@ -1576,6 +1613,8 @@ class Emitter:
         self.helpers: set[tuple[str, str]] = set()  # (op, type)
         self.cast_helpers: set[str] = set()  # signed target types
         self.need_panic = False
+        self.uses_str = False
+        self.uses_slice_u8 = False
 
     def add_type_include(self, t: str) -> None:
         if t in FIXED_WIDTH:
@@ -1584,6 +1623,12 @@ class Emitter:
             self.includes.add("stddef.h")
         elif t == BOOL:
             self.includes.add("stdbool.h")
+        elif t == STR:
+            self.uses_str = True
+            self.includes.add("stddef.h")  # size_t in crx_str
+        elif t == SLICE_U8:
+            self.uses_slice_u8 = True
+            self.includes |= {"stdint.h", "stddef.h"}  # uint8_t + size_t
 
     def use_checked(self, op: str, t: str) -> None:
         self.helpers.add((op, t))
@@ -1623,7 +1668,10 @@ class Emitter:
             )
             return f"({node.type_name}){{ {parts} }}"
         if isinstance(node, StrLit):
-            return c_string_literal(node.value)
+            # A `str` value lowers to a crx_str fat slice over the C string
+            # literal (which carries an implicit NUL the literal length excludes).
+            self.add_type_include(STR)
+            return f"(crx_str){{ {c_string_literal(node.value)}, {str_byte_len(node.value)} }}"
         raise AssertionError(f"cannot emit expression {node!r}")  # pragma: no cover
 
     def _value_preserving(self, src: str, tgt: str) -> bool:
@@ -1723,6 +1771,13 @@ class Emitter:
                 helper_lines.append(gen_cast_helper(t))
                 helper_lines.append("")
 
+        # Built-in slice typedefs, before any user struct that may embed them.
+        slice_lines: list[str] = []
+        if self.uses_str:
+            slice_lines += [CRX_STR_DEF, ""]
+        if self.uses_slice_u8:
+            slice_lines += [CRX_SLICE_U8_DEF, ""]
+
         lines: list[str] = []
         lines.append(f"/* Generated by crustc (CRusty++ v0.1) from {self.source_path} */")
         lines.append("/* Do not edit by hand. */")
@@ -1730,6 +1785,7 @@ class Emitter:
             lines.append(f"#include <{header}>")
         lines.append("")
         lines.extend(helper_lines)
+        lines.extend(slice_lines)
         lines.extend(struct_lines)
         lines.append("int main(void) {")
         lines.extend(body_lines)

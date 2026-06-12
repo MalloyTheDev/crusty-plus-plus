@@ -2,7 +2,7 @@
 
 The CRusty++ conformance test suite.
 
-**Status: M1 + M2A + M2B + M2C + M2D + M2E harnesses in place.**
+**Status: M1 + M2A + M2B + M2C + M2D + M2E + M3A harnesses in place.**
 
 Acceptance tests (compile → build → run → assert golden C + exit code):
 
@@ -12,6 +12,7 @@ Acceptance tests (compile → build → run → assert golden C + exit code):
 - [`m2c_loops.py`](./m2c_loops.py) — `m2c_loops.crust`; exit `0`.
 - [`m2d_numeric.py`](./m2d_numeric.py) — `m2d_numeric_types.crust`; exit `0`.
 - [`m2e_casts.py`](./m2e_casts.py) — `m2e_casts.crust`; exit `0`.
+- [`m3a_slices.py`](./m3a_slices.py) — `m3a_slices.crust`; exit `0`.
 
 Behavior tests (runtime exit-code assertions):
 
@@ -33,6 +34,12 @@ Diagnostic + control-flow + numeric tests:
   i16`, `u8→i32`, `i8→i32`); and negative compile cases `bool as i32`
   (`CRX0038`), `i32 as bool` (`CRX0039`), `struct as i32` (`CRX0038`),
   `5 as Foo` (`CRX0021`).
+- [`m3a_checks.py`](./m3a_checks.py) — four slice runtime programs (exit `0`):
+  `str` literal `.len` byte length, escaped-literal `.len`, `.len` through a
+  struct `str` field, and a `[]u8` struct field that compiles with no value; and
+  negative compile cases `str` arithmetic (`CRX0028`), `str` comparison
+  (`CRX0029`), `str as i32` (`CRX0038`), `5 as str` (`CRX0039`), `.len` on `i32`
+  (`CRX0026`), `str` non-`len` field (`CRX0025`).
 
 Goldens live in [`golden/`](./golden/) (one `.c` per acceptance example) for the
 codegen stability checks.
@@ -41,7 +48,8 @@ Run them all:
 
 ```sh
 for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops \
-         m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks; do
+         m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks \
+         m3a_slices m3a_checks; do
     python3 tests/$t.py || break
 done
 ```

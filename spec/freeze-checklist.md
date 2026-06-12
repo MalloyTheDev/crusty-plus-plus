@@ -174,11 +174,26 @@ unary `-`, tighter than `* /` (a spec-precedence inconsistency between
 `tests/m2e_checks.py` (6 cast-value programs + 4 negative cases).
 
 > **M2 numeric system is complete; boolean/`%` layer is not.** Casts close the
-> last *numeric* foundation. Still deferred for later (not blocking M3A): `%`,
-> `&& || !`. The next milestone is **M3A** (slices: `str`, `[]u8`, `.len`).
-> `usize` is treated as 64-bit `size_t` (documented in `compiler/crustc.py` and
-> `compiler/README.md`); cross-target pointer width is future work. Specs remain
-> **FREEZE-CANDIDATE**, not FROZEN.
+> last *numeric* foundation. Still deferred for later: `%`, `&& || !`. `usize`
+> is treated as 64-bit `size_t`; cross-target pointer width is future work.
+
+**M3A — slices.** ✅ Built-in fat-slice types `str` and `[]u8` (`{ ptr, len }`,
+non-owning, non-null, immutable, copied by value) with read-only `.len: usize`.
+String literals have type `str`; `str.len` is the UTF-8 **byte** length (escapes
+counted as their bytes). Slice `.len` takes precedence over struct field lookup;
+`.len` on a non-slice/non-struct value is rejected (CRX0026); a slice field other
+than `len` is rejected (CRX0025). Arithmetic/comparison/cast on `str`/`[]u8` are
+rejected via the existing numeric-only rules (CRX0028/CRX0029/CRX0038/CRX0039) —
+**no new diagnostic codes were needed**. Lowering: `str → crx_str`,
+`[]u8 → crx_slice_u8`, string literal → `(crx_str){ "...", byte_len }`. Target
+`examples/m3a_slices.crust` (`tests/m3a_slices.py`, exit `0`) plus
+`tests/m3a_checks.py` (4 runtime + 6 negative cases).
+
+> **`[]u8` is type/lowering only in M3A.** There is no value source for `[]u8`
+> yet (no file I/O, indexing, or array literals), so it is allowed as a type and
+> struct field and lowers to C, but cannot be constructed. A runtime `[]u8` value
+> arrives with **M3D** (`read_all_bytes`). Next: **M3B** (`Result`/`Option` core
+> types). Specs remain **FREEZE-CANDIDATE**, not FROZEN.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

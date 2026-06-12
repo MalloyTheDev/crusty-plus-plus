@@ -1,0 +1,8 @@
+// []u8 is a valid struct field type and lowers to C, even with no value source.
+struct Blob {
+    data: []u8,
+    size: usize,
+}
+fn main() -> i32 {
+    return 0;
+}

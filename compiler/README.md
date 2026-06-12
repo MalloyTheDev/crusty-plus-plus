@@ -2,8 +2,8 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestones M1 + M2A + M2B + M2C + M2D + M2E implemented.** `crustc.py`
-compiles the strict M1–M2E subset end-to-end to portable C:
+**Status: milestones M1 + M2A + M2B + M2C + M2D + M2E + M3A implemented.**
+`crustc.py` compiles the strict M1–M3A subset end-to-end to portable C:
 
 - **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
   return.
@@ -21,6 +21,8 @@ compiles the strict M1–M2E subset end-to-end to portable C:
 - **M2E** — [`../examples/m2e_casts.crust`](../examples/m2e_casts.crust): explicit
   numeric `as` casts (the only way to narrow or reinterpret a numeric value;
   casts never panic).
+- **M3A** — [`../examples/m3a_slices.crust`](../examples/m3a_slices.crust): the
+  built-in fat-slice types `str` and `[]u8` with read-only `.len: usize`.
 
 Everything beyond this subset is intentionally rejected with a diagnostic, not
 parsed — the compiler never accepts more than the spec defines.
@@ -33,21 +35,16 @@ parsed — the compiler never accepts more than the spec defines.
 
 ```sh
 # Emit C to stdout / file, build, build-and-run:
-python3 compiler/crustc.py examples/m2e_casts.crust
-python3 compiler/crustc.py examples/m2e_casts.crust --emit-c build/m2e.c
-python3 compiler/crustc.py examples/m2e_casts.crust --run
+python3 compiler/crustc.py examples/m3a_slices.crust
+python3 compiler/crustc.py examples/m3a_slices.crust --emit-c build/m3a.c
+python3 compiler/crustc.py examples/m3a_slices.crust --run
 
 # Acceptance + behavior + diagnostic checks:
-python3 tests/m1_hello.py
-python3 tests/m2a_structs.py
-python3 tests/m2b_checked_if.py
-python3 tests/m2b_behavior.py
-python3 tests/m2c_loops.py
-python3 tests/m2c_diagnostics.py
-python3 tests/m2d_numeric.py
-python3 tests/m2d_checks.py
-python3 tests/m2e_casts.py
-python3 tests/m2e_checks.py
+for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops \
+         m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks \
+         m3a_slices m3a_checks; do
+    python3 tests/$t.py || break
+done
 ```
 
 ## Grammar (exactly what `crustc` accepts today)
@@ -81,10 +78,14 @@ primary     = int_lit | string_lit | "(" expr ")"
             | ident                            ; variable
             | ident "{" finits? "}"            ; struct literal (not in a condition)
 finits      = ident ":" expr ("," ident ":" expr)* ","?
-type        = numeric_type | "bool" | <declared struct name>
+type        = numeric_type | "bool" | "str" | "[" "]" "u8"
+            | <declared struct name>
 numeric_type = "i8" | "i16" | "i32" | "i64"
              | "u8" | "u16" | "u32" | "u64" | "usize"
 ```
+
+`postfix`'s `.len` on a `str`/`[]u8` value is the built-in slice length; on a
+struct it is ordinary field access.
 
 Notes: an `ident {` immediately inside an `if`/`while` condition is the block
 opener, not a struct literal (parenthesize if you need a struct literal there).
@@ -96,11 +97,11 @@ binary operators**: `-x as T` is `(-x) as T`; `a as T + b` is `(a as T) + b`.
 Casts are left-associative. Parenthesize for any other grouping.
 
 This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
-parameters, `%`, `&& || !`, field assignment, slices, `Result`/`Option`, `?`,
-struct-typed fields, and any function other than `main` are **rejected** (see
-Diagnostics). They arrive in later milestones (see
-[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M3A
-recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+parameters, `%`, `&& || !`, field assignment, indexing/slicing expressions, array
+literals, `Result`/`Option`, `?`, file I/O, struct-typed fields, and any function
+other than `main` are **rejected** (see Diagnostics). They arrive in later
+milestones (see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and
+the M3B recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
 
 ## Casts (M2E)
 
@@ -144,6 +145,35 @@ not solve cross-target `usize`.
   same** numeric type — no implicit promotion, no mixed sign, no mixed width
   (`CRX0035` / `CRX0029`). The result is that type (arithmetic) or `bool`
   (comparison). Unary `-` is signed-only (`CRX0037`).
+
+## Slices: `str` and `[]u8` (M3A)
+
+- `str` and `[]u8` are built-in **fat slices** — a (pointer, length) pair. They
+  are non-owning, non-null in the language model, immutable, and copied by value
+  (the C struct is copied; the pointee is not).
+- A **string literal has type `str`**. As a `let`/field value it lowers to a
+  `crx_str` over the C string literal; as a `println` argument it stays a direct
+  `puts("...")` (M1 behavior).
+- **`.len`** is a built-in read-only `usize` on `str`/`[]u8` and takes precedence
+  over struct field lookup (they are not user structs). `.len` on a struct is
+  ordinary field access; `.len` on a numeric/`bool` value is rejected
+  (`CRX0026`); any slice field other than `.len` is rejected (`CRX0025`).
+- Arithmetic, comparison, and casts involving `str`/`[]u8` are **invalid** — they
+  fall out of the numeric-only rules (`CRX0028` / `CRX0029` / `CRX0038` /
+  `CRX0039`).
+- **No indexing, slicing, mutation, or bounds model** yet (none are implemented),
+  and there is **no value source for `[]u8`** in M3A — it is a valid type (e.g. a
+  struct field) and lowers to C, but cannot yet be constructed (that arrives with
+  M3 file I/O). No fake I/O primitive is invented to produce one.
+
+**String byte length.** `str.len` (and the lowered `crx_str` length) is the
+**UTF-8 byte length**, with each escape (`\n \t \\ \"`) counted as the one byte
+it decodes to — not a Unicode scalar count.
+
+**Lowering.** `str` → `typedef struct { const char *ptr; size_t len; } crx_str;`;
+`[]u8` → `typedef struct { const uint8_t *ptr; size_t len; } crx_slice_u8;`. A
+string literal value → `(crx_str){ "literal", <byte-len> }`. `.len` → the C `.len`
+field. The slice typedefs are emitted before any user struct that embeds them.
 
 ## Checked arithmetic
 

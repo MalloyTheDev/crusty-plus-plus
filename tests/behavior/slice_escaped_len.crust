@@ -1,0 +1,5 @@
+// Escaped string literal .len counts each escape as one byte.
+fn main() -> i32 {
+    let s: str = "a\nb\tc";            // a \n b \t c == 5 bytes
+    if s.len == 5 { return 0; } else { return 1; }
+}

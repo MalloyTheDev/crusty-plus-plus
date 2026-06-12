@@ -1,0 +1,38 @@
+// m3a_slices.crust
+//
+// M3A target: the built-in fat-slice types `str` and `[]u8`, plus read-only
+// `.len`. This proves CRusty++ can represent slice-like data in the type system
+// and lower it to C — without file I/O, indexing, Result/Option, or `?`.
+//
+// `[]u8` has no value source yet (that arrives with M3 file I/O), so it is only
+// *declared* as a struct field type here to prove the type and its C lowering.
+//
+// Returns 0 on success.
+
+struct Greeting {
+    text: str,
+    size: usize,
+}
+
+// Declared to prove `[]u8` is a valid field type and lowers to C. Not
+// constructed: there is no way to produce a `[]u8` value in M3A.
+struct Blob {
+    data: []u8,
+    size: usize,
+}
+
+fn main() -> i32 {
+    let msg: str = "Hello, CRusty++!";   // 16 bytes
+    let n: usize = msg.len;              // read .len from a str value
+    let n32: i32 = msg.len as i32;       // .len (usize) cast to i32
+
+    let g: Greeting = Greeting { text: "abc", size: 3 };
+    let glen: usize = g.text.len;        // .len through a struct field
+
+    let mut result: i32 = 0;
+    if n == 16 { } else { result = 1; }
+    if n32 == 16 { } else { result = 1; }
+    if glen == 3 { } else { result = 1; }
+    if g.size == 3 { } else { result = 1; }
+    return result;
+}

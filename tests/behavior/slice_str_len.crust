@@ -1,0 +1,5 @@
+// str literal .len returns the correct byte length.
+fn main() -> i32 {
+    let s: str = "Hello, CRusty++!";   // 16 bytes
+    if s.len == 16 { return 0; } else { return 1; }
+}

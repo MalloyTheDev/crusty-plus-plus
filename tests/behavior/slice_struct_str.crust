@@ -1,0 +1,9 @@
+// A struct with a str field; .len works through field access.
+struct Tag {
+    name: str,
+    id: usize,
+}
+fn main() -> i32 {
+    let t: Tag = Tag { name: "crusty", id: 7 };
+    if t.name.len == 6 { return 0; } else { return 1; }
+}

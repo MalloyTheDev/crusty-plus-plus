@@ -45,10 +45,14 @@ conform. **No compiler code is written before this phase closes.**
       defined two's-complement semantics (never panics) →
       `examples/m2e_casts.crust`; `tests/m2e_casts.py` and `tests/m2e_checks.py`
       pass. Final numeric-system milestone.
-- [ ] M3A — slices: `str`, `[]u8`, and `.len`. (First step toward binary/file
-      inspection; `%` and boolean logic intentionally deferred.)
-- [ ] M3 — `Result`/`Option`, `?`, prelude I/O → compile `file_read.crust` and
-      `crust_inspect.crust`.
+- [x] **M3A — slices.** Built-in `str` and `[]u8` fat-slice types with read-only
+      `.len: usize` → `examples/m3a_slices.crust`; `tests/m3a_slices.py` and
+      `tests/m3a_checks.py` pass. (`[]u8` has no value source yet — type/lowering
+      only.)
+- [ ] M3B — `Result`/`Option` core types.
+- [ ] M3C — `?` propagation.
+- [ ] M3D — prelude `read_all_bytes` + `file_read.crust`.
+- [ ] M3E — `crust_inspect.crust`.
 - [ ] Type checker for the full `v0.1` type set
 - [ ] (No move/borrow checker — all v0.1 types copy; see `spec/memory-model.md` §1)
 - [ ] Conformance test suite under `tests/` — every example compiles and runs
