@@ -24,9 +24,9 @@ conform. **No compiler code is written before this phase closes.**
 **Goal:** a compiler that accepts exactly the frozen `v0.1` language.
 
 - [ ] Lexer + parser producing an AST that matches `spec/syntax.md`
-- [ ] Type checker for the `v0.1` type set
-- [ ] Ownership / move checker per `spec/memory-model.md`
-- [ ] Code generation for a single target triple
+- [ ] Type checker for the `v0.1` type set (incl. context-typed integer literals)
+- [ ] (No move/borrow checker — all v0.1 types copy; see `spec/memory-model.md` §1)
+- [ ] Code generation to **portable C** (frozen backend; see `compiler/README.md`)
 - [ ] Conformance test suite under `tests/` — every example compiles and runs
 - [ ] Pick and add a `LICENSE`
 
@@ -65,4 +65,9 @@ Tracked here until resolved, then moved into the relevant spec:
 
 - Implementation language for the first compiler (Phase 1).
 - License choice (before any code lands).
+
+Resolved:
+
+- **Backend = portable C** (no LLVM/WASM/native). See `compiler/README.md` and
+  `spec/v0.1.md` §9.
 - Target triple for the first backend.

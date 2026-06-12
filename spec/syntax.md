@@ -1,6 +1,6 @@
 # CRusty++ Syntax — Lexical and Grammatical Reference
 
-> Status: **DRAFT**, tracking `v0.1`. Frozen alongside
+> Status: **FREEZE-CANDIDATE**, tracking `v0.1`. Frozen alongside
 > [`v0.1.md`](./v0.1.md).
 
 This document defines the concrete syntax of CRusty++ `v0.1`: how source text is
@@ -24,8 +24,7 @@ The grammar is written in a simple EBNF:
 
 - Source files are UTF-8 and use the `.crust` extension.
 - Line endings may be `\n` or `\r\n`; both are treated as a newline.
-- Whitespace (spaces, tabs, newlines) separates tokens and is otherwise
-  insignificant.
+- Whitespace separates tokens and is otherwise insignificant.
 
 ## 2. Comments
 
@@ -33,8 +32,7 @@ The grammar is written in a simple EBNF:
 // line comment to end of line
 ```
 
-- `//` begins a line comment.
-- v0.1 has **no** block comments.
+`//` begins a line comment. v0.1 has **no** block comments.
 
 ## 3. Identifiers and keywords
 
@@ -48,12 +46,20 @@ Reserved keywords (may not be used as identifiers):
 
 ```
 fn  let  mut  struct  return  if  else  while  loop  break  continue
-true  false  as
+true  false  as  unsafe
 ```
 
-Type names (`i8`…`i64`, `u8`…`u64`, `f64`, `bool`, `str`, `String`) and prelude
-names (`println`, `print`, `panic`, …) are not keywords but are predeclared;
-shadowing them is discouraged and may be rejected.
+`unsafe` is **reserved** in v0.1 for forward compatibility but has no grammar or
+semantics yet (see [`memory-model.md`](./memory-model.md) §6).
+
+Predeclared names (not keywords, but provided by the language; shadowing is
+discouraged and may be rejected):
+
+- Type names: `i8`…`i64`, `u8`…`u64`, `usize`, `f64`, `bool`, `str`, `()`,
+  `Option`, `Result`, `FileError`.
+- Constructors: `Ok`, `Err`, `Some`, `None`.
+- Prelude functions: `print`, `println`, `read_all_bytes`, `is_ok`, `is_err`,
+  `unwrap`, `panic` (see [`v0.1.md`](./v0.1.md) §2.9).
 
 ## 4. Literals
 
@@ -66,7 +72,10 @@ string_lit = '"' ( char_escape | not_quote )* '"'
 char_escape = "\\" ( "n" | "t" | "\\" | '"' )
 ```
 
-- Underscores in numeric literals are separators only and carry no value.
+- Underscores in numeric literals are separators only.
+- A string literal has type `str`.
+- An integer literal is **context-typed**, defaulting to `i32`; a float literal
+  defaults to `f64` ([`v0.1.md`](./v0.1.md) §2.2).
 - String literals may not span multiple lines in v0.1.
 
 ## 5. Operators and punctuation
@@ -76,12 +85,16 @@ char_escape = "\\" ( "n" | "t" | "\\" | '"' )
 ==  !=  <  <=  >  >=
 &&  ||  !
 =                       // assignment / binding
-&  &mut                 // borrow operators (see memory-model.md)
+&  &mut                 // borrow operators (reserved; see memory-model.md)
 :  ;  ,  .
-( )  { }
+( )  { }  [ ]  < >
 ->                      // function return arrow
 ?                       // error-propagation operator (see error-handling.md)
 ```
+
+There is **no `::`** in v0.1. `[ ]` appears only in the slice *type* form `[]T`
+(§6.4); there is no index expression `a[i]`. `< >` appear only in the two
+built-in core-constructor type forms (§6.4); there is no general generic syntax.
 
 Precedence, from tightest to loosest binding:
 
@@ -93,8 +106,7 @@ Precedence, from tightest to loosest binding:
 6. `&&`
 7. `||`
 
-Assignment (`=`) is a statement, not an expression, and does not participate in
-the precedence table.
+Assignment (`=`) is a statement, not an expression.
 
 ## 6. Grammar
 
@@ -125,15 +137,26 @@ field       = ident ":" type
 ### 6.4 Types
 
 ```
-type        = scalar_type | "str" | "String" | ident | ref_type
+type        = scalar_type | slice_type | core_type | "str" | "()" | ident | ref_type
 scalar_type = "i8" | "i16" | "i32" | "i64"
             | "u8" | "u16" | "u32" | "u64"
-            | "f64" | "bool"
+            | "usize" | "f64" | "bool"
+slice_type  = "[" "]" elem_type
+elem_type   = "u8"                        // v0.1 only requires byte slices
+core_type   = "Option" "<" type ">"
+            | "Result" "<" type "," type ">"
 ref_type    = "&" "mut"? type
 ```
 
-`ident` as a type names a previously-declared `struct`. Built-in `Option`/`Result`
-shapes are described in [`error-handling.md`](./error-handling.md).
+- `slice_type` is restricted to `[]u8` in v0.1; the general `[]T` form is not yet
+  exercised. `str` is a built-in text slice and is spelled `str`, not `[]u8`.
+- `core_type` recognizes **only** `Option<...>` and `Result<...>`. This is fixed
+  built-in sugar, **not** user-definable generics (see
+  [`../NON_GOALS.md`](../NON_GOALS.md)).
+- `ident` as a type names a previously-declared `struct` or the built-in
+  `FileError`.
+- `ref_type` is recognized for forward compatibility; examples and the first
+  prototype do not require references ([`memory-model.md`](./memory-model.md) §6).
 
 ### 6.5 Blocks and statements
 
@@ -159,6 +182,9 @@ expr_stmt   = expr ";"
 place       = ident ( "." ident )*
 ```
 
+A slice's `.len` is read via ordinary field access (`place = ident "." "len"`);
+it is not assignable.
+
 ### 6.6 Control flow
 
 ```
@@ -167,7 +193,7 @@ while_stmt  = "while" expr block
 loop_stmt   = "loop" block
 ```
 
-The condition of `if` and `while` must be an expression of type `bool`.
+The condition of `if` and `while` must have type `bool`.
 
 ### 6.7 Expressions
 
@@ -198,9 +224,17 @@ field_init  = ident ":" expr
 borrow      = "&" "mut"? expr
 ```
 
+The constructors `Ok`, `Err`, `Some`, and `None` are ordinary `call`s over
+predeclared names (`Ok(x)`, `Err(e)`, `Some(v)`, `None()` / `None`). Postfix `?`
+applies to a `Result`-typed expression ([`error-handling.md`](./error-handling.md)
+§3).
+
 ## 7. What is intentionally absent
 
-To keep the grammar small, v0.1 has no syntax for: generics (`<T>`), closures
-(`|x| ...`), `match`, `for`, array/index (`a[i]`), method-call (`x.f()` as
-dispatch — `.` is field access only), block comments, multi-line strings, or
-attributes/annotations. See [`../NON_GOALS.md`](../NON_GOALS.md).
+To keep the grammar small, v0.1 has **no** syntax for: user generics (`struct
+Foo<T>`, `fn id<T>`), closures (`|x| ...`), `match`, `for`, index expressions
+(`a[i]`), method calls (`x.f()` — `.` is field access only), block comments,
+multi-line strings, attributes, namespacing (`::`), an owned `String` type, or a
+`void` keyword (a value-less function omits `-> T` and returns `()`). The only
+angle-bracket types are the two built-in `core_type` forms (§6.4). See
+[`../NON_GOALS.md`](../NON_GOALS.md).

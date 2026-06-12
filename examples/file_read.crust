@@ -1,58 +1,36 @@
 // file_read.crust
 //
-// A target program exercising recoverable error handling.
-// Demonstrates: `Result`, the `?` propagation operator, `Err`/`Ok`,
-//               borrows, and returning a nonzero exit code.
+// A compliant v0.1 target program focused on recoverable error handling.
+// Exercises: `Result<T, E>`, the `?` operator, the `read_all_bytes` prelude
+//            function, `is_err`/`unwrap` inspection, distinct exit codes, and
+//            `as` casts. No String, no `::`, no `match`, no undefined helpers.
 //
-// ┌───────────────────────────────────────────────────────────────────────────┐
-// │ NOT A v0.1 SUCCESS CRITERION YET. This example depends on UNRESOLVED open   │
-// │ questions and cannot be frozen until they are decided. See                 │
-// │ spec/freeze-checklist.md:                                                   │
-// │   • B1  str vs &str model        → param types below use the unresolved    │
-// │                                      `&str`; should become `str` if B1 is   │
-// │                                      decided as recommended.                │
-// │   • B2  Option/Result<> syntax   → `Result<String, str>` is not parseable  │
-// │                                      under the current grammar.             │
-// │   • B4  prelude is undefined     → `read_to_string`, `string_len`,         │
-// │                                      `is_err`, `unwrap` are NOT defined in  │
-// │                                      any spec. `read_to_string` (file I/O)  │
-// │                                      is deferred entirely.                  │
-// │ The control-flow shape (Result + `?` + early exit) is what this example    │
-// │ pins down; the spellings above are placeholders pending freeze.            │
-// └───────────────────────────────────────────────────────────────────────────┘
+// v0.1 has no integer-to-text formatting, so the program reports via fixed
+// messages and signals detail through its exit code.
 //
-// Intended behavior once the above freeze: reads two files, prints status, exits
-// 0 on success; on any read failure, prints the error and exits 1.
+// Expected behavior: reads "input.txt"; exits 1 on read failure, 2 if the file
+//                    is empty, 0 if it has content.
 
-// Reads a file and returns its contents as an owned String, or an error message.
-fn read_file(path: &str) -> Result<String, str> {
-    // On the failure path the primitive returns Err("..."), which `?` propagates.
-    let contents: String = read_to_string(path)?;
-    return Ok(contents);
-}
-
-// Returns the length of a file's contents, propagating any read error.
-fn file_len(path: &str) -> Result<i32, str> {
-    let body: String = read_file(path)?;   // `?` returns early on Err
-    let n: i32 = string_len(&body);         // borrow; `body` dropped at scope end
-    return Ok(n);
+// Returns the file size in bytes, propagating any read error with `?`
+// (legal because this function returns Result<i32, FileError>).
+fn read_size(path: str) -> Result<i32, FileError> {
+    let bytes: []u8 = read_all_bytes(path)?;
+    return Ok(bytes.len as i32);
 }
 
 fn main() -> i32 {
-    let a: Result<i32, str> = file_len("a.txt");
-    let b: Result<i32, str> = file_len("b.txt");
-
-    // v0.1 inspects Result with `if` against constructors (no `match` yet).
-    if is_err(&a) {
-        println("error: could not read a.txt");
-        return 1;
-    }
-    if is_err(&b) {
-        println("error: could not read b.txt");
+    let result: Result<i32, FileError> = read_size("input.txt");
+    if is_err(result) {
+        println("error: could not read input.txt");
         return 1;
     }
 
-    let total: i32 = unwrap(a) + unwrap(b);
-    println("ok");
+    let size: i32 = unwrap(result);    // safe: the Err case already returned
+    if size == 0 {
+        println("input.txt is empty");
+        return 2;
+    }
+
+    println("input.txt has content");
     return 0;
 }

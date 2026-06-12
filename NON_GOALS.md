@@ -16,9 +16,12 @@ so that "no" has a written home and we stop relitigating the same questions.
 
 ### Language features
 
-- **Generics / parametric polymorphism.** No `fn id<T>(x: T) -> T`. v0.1 has only
-  concrete, monomorphic types. Generics are the single most likely v0.2 addition,
-  but they are *hard* to specify well and we will not rush them.
+- **Generics / parametric polymorphism.** No `fn id<T>(x: T) -> T`, no
+  `struct Foo<T>`. v0.1 has only concrete, monomorphic types. The **only**
+  angle-bracket types are the two built-in core constructors `Option<T>` and
+  `Result<T, E>` — fixed language sugar, **not** user-definable generics. General
+  generics are the single most likely v0.2 addition, but they are *hard* to
+  specify well and we will not rush them.
 - **Traits / interfaces / typeclasses.** No shared-behavior abstraction. No
   `impl Trait for Type`. Dispatch is static and direct.
 - **Inheritance / subtyping.** Structs are flat records. There is no class
@@ -37,13 +40,20 @@ so that "no" has a written home and we stop relitigating the same questions.
 
 ### Types
 
-- **No floating point in arithmetic-critical paths beyond `f64`.** v0.1 keeps the
-  numeric tower tiny (see [`spec/v0.1.md`](./spec/v0.1.md)).
+- **No owned/growable string type.** v0.1 has no `String`. Text is the borrowed
+  `str` slice (an immutable `{ ptr, len }` view). An owned string is deferred.
+- **No general arrays or slice indexing.** v0.1 has the two built-in slices `str`
+  and `[]u8` with a read-only `.len` only — **no** index expression `a[i]` and
+  therefore no bounds-checking model yet. General `[]T` slices and arrays are
+  deferred (see [`spec/v0.1.md`](./spec/v0.1.md) §2.5).
+- **No floating point beyond `f64`.** v0.1 keeps the numeric tower tiny.
 - **No user-defined enums with payloads (sum types).** Only `struct` records and
-  built-in `Result`/`Option`-style types provided by the language.
-- **No references with explicit lifetime annotations.** v0.1 borrowing is scoped
-  and inferred; named lifetimes (`'a`) are a later concern. See
-  [`spec/memory-model.md`](./spec/memory-model.md).
+  the built-in `Result`/`Option` constructors provided by the language.
+- **No references with explicit lifetime annotations.** Named lifetimes (`'a`)
+  are a later concern. v0.1 does not even implement a borrow checker; all types
+  copy. See [`spec/memory-model.md`](./spec/memory-model.md).
+- **No raw pointers / `unsafe` implementation.** `unsafe` is a *reserved* keyword
+  with no v0.1 semantics; raw pointers are deferred.
 
 ### Tooling and ecosystem
 
