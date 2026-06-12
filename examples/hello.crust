@@ -1,0 +1,11 @@
+// hello.crust
+//
+// The smallest valid CRusty++ program.
+// Demonstrates: `main` signature, the `println` prelude function, exit codes.
+//
+// Expected behavior: prints "Hello, CRusty++!" and exits with code 0.
+
+fn main() -> i32 {
+    println("Hello, CRusty++!");
+    return 0;
+}

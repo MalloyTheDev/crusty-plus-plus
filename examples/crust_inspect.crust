@@ -1,0 +1,64 @@
+// crust_inspect.crust
+//
+// A target program exercising the value/memory model.
+// Demonstrates: `struct` records, ownership and moves, shared borrows,
+//               checked arithmetic, and control flow (`while`, `loop`, `if`).
+//
+// Expected behavior: builds a small record, inspects it through a borrow,
+//                    runs a counted loop, and exits 0.
+
+struct Sample {
+    id: i32,
+    weight: f64,
+}
+
+// Borrows the sample (does not take ownership) and returns a derived score.
+// Because `s` is a `&Sample`, the caller keeps ownership after the call.
+fn score(s: &Sample) -> i32 {
+    // Field access through a shared borrow is read-only.
+    return s.id * 2;
+}
+
+// Sums 0..n using checked arithmetic. Integer overflow here is a defined panic
+// per spec/v0.1.md §6, not undefined behavior.
+fn sum_to(n: i32) -> i32 {
+    let mut acc: i32 = 0;
+    let mut i: i32 = 0;
+    while i < n {
+        acc = acc + i;
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn main() -> i32 {
+    let original: Sample = Sample { id: 7, weight: 1.5 };
+
+    // Shared borrow: `original` is still owned after this call.
+    let s: i32 = score(&original);
+    println("scored");
+
+    // Move: ownership transfers to `taken`. Using `original` after this line
+    // would be a compile-time error (spec/memory-model.md §3).
+    let taken: Sample = original;
+    let s2: i32 = score(&taken);
+
+    // Infinite loop with an explicit break, the v0.1 idiom for early exit.
+    let mut count: i32 = 0;
+    loop {
+        if count >= 3 {
+            break;
+        }
+        count = count + 1;
+    }
+
+    let total: i32 = sum_to(10) + s + s2 + count;
+    if total < 0 {
+        // Should be unreachable; demonstrates `panic` for invariant violations.
+        panic("internal error: negative total");
+    }
+
+    println("done");
+    return 0;
+    // `taken` is dropped here; `original` is not (it was moved out).
+}

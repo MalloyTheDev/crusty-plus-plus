@@ -1,0 +1,45 @@
+// file_read.crust
+//
+// A target program exercising recoverable error handling.
+// Demonstrates: `Result`, the `?` propagation operator, `Err`/`Ok`,
+//               borrows (`&str` parameters), and returning a nonzero exit code.
+//
+// NOTE: `read_to_string` is shown as a prelude/IO primitive. Its exact name and
+//       signature are still open in spec/syntax.md (prelude section) and must be
+//       fixed before v0.1 freezes. The control-flow shape, however, is final.
+//
+// Expected behavior: reads two files, prints the combined length, exits 0 on
+//                    success; on any read failure, prints the error and exits 1.
+
+// Reads a file and returns its contents as an owned String, or an error message.
+fn read_file(path: &str) -> Result<String, str> {
+    // On the failure path the primitive returns Err("..."), which `?` propagates.
+    let contents: String = read_to_string(path)?;
+    return Ok(contents);
+}
+
+// Returns the length of a file's contents, propagating any read error.
+fn file_len(path: &str) -> Result<i32, str> {
+    let body: String = read_file(path)?;   // `?` returns early on Err
+    let n: i32 = string_len(&body);         // borrow; `body` dropped at scope end
+    return Ok(n);
+}
+
+fn main() -> i32 {
+    let a: Result<i32, str> = file_len("a.txt");
+    let b: Result<i32, str> = file_len("b.txt");
+
+    // v0.1 inspects Result with `if` against constructors (no `match` yet).
+    if is_err(&a) {
+        println("error: could not read a.txt");
+        return 1;
+    }
+    if is_err(&b) {
+        println("error: could not read b.txt");
+        return 1;
+    }
+
+    let total: i32 = unwrap(a) + unwrap(b);
+    println("ok");
+    return 0;
+}
