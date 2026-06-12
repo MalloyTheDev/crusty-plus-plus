@@ -1,0 +1,6 @@
+// Behavior: i8 addition overflow must abort with exit 101.
+fn main() -> i32 {
+    let a: i8 = 100;
+    let r: i8 = a + 100;   // 200 > 127 -> panic
+    return 0;
+}

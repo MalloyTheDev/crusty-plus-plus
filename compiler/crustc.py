@@ -679,6 +679,34 @@ I32 = "i32"
 BOOL = "bool"
 UNIT = "()"
 
+SIGNED_TYPES = {"i8", "i16", "i32", "i64"}
+UNSIGNED_TYPES = {"u8", "u16", "u32", "u64", "usize"}
+NUMERIC_TYPES = SIGNED_TYPES | UNSIGNED_TYPES
+
+# Inclusive [min, max] literal ranges. `usize` is treated as 64-bit unsigned for
+# literal range-checking (the smallest width crustc targets for it).
+INT_RANGE: dict[str, tuple[int, int]] = {
+    "i8": (-(2**7), 2**7 - 1),
+    "i16": (-(2**15), 2**15 - 1),
+    "i32": (-(2**31), 2**31 - 1),
+    "i64": (-(2**63), 2**63 - 1),
+    "u8": (0, 2**8 - 1),
+    "u16": (0, 2**16 - 1),
+    "u32": (0, 2**32 - 1),
+    "u64": (0, 2**64 - 1),
+    "usize": (0, 2**64 - 1),
+}
+
+
+def is_literalish(expr: Node) -> bool:
+    """An integer literal, or unary minus applied to one — i.e. an expression
+    whose numeric type is decided entirely by context."""
+    if isinstance(expr, IntLit):
+        return True
+    if isinstance(expr, Unary) and expr.op == "-":
+        return is_literalish(expr.operand)
+    return False
+
 
 def loop_has_break(stmts: list[Node]) -> bool:
     """True if `stmts` contains a `break` that targets the enclosing loop.
@@ -746,7 +774,7 @@ class Checker:
             self.structs[decl.name] = decl
         for decl in self.program.structs:
             for fld in decl.fields:
-                if fld.type_name == I32:
+                if fld.type_name in NUMERIC_TYPES or fld.type_name == BOOL:
                     continue
                 if fld.type_name in self.structs:
                     raise Diagnostic(
@@ -755,7 +783,7 @@ class Checker:
                         self.path,
                         fld.line,
                         fld.col,
-                        "struct fields must be `i32`",
+                        "struct fields must be a numeric type or `bool`",
                     )
                 raise Diagnostic(
                     "CRX0021",
@@ -763,7 +791,7 @@ class Checker:
                     self.path,
                     fld.line,
                     fld.col,
-                    "struct field types must be `i32`",
+                    "struct field types must be a numeric type or `bool`",
                 )
 
     def check_main(self) -> Func:
@@ -902,19 +930,10 @@ class Checker:
                 target.col,
                 f"declare it as `let mut {target.name}: ...`",
             )
-        actual = self.infer(stmt.value)
-        if actual != declared:
-            raise Diagnostic(
-                "CRX0014",
-                f"type mismatch: `{target.name}` is `{declared}` "
-                f"but the assigned value has type `{actual}`",
-                self.path,
-                stmt.value.line,
-                stmt.value.col,
-            )
+        self.check(stmt.value, declared)
 
     def check_while(self, stmt: While) -> None:
-        cond_type = self.infer(stmt.cond)
+        cond_type = self.synth(stmt.cond)
         if cond_type != BOOL:
             raise Diagnostic(
                 "CRX0030",
@@ -934,7 +953,7 @@ class Checker:
         self.loop_depth -= 1
 
     def check_if(self, stmt: If) -> None:
-        cond_type = self.infer(stmt.cond)
+        cond_type = self.synth(stmt.cond)
         if cond_type != BOOL:
             raise Diagnostic(
                 "CRX0030",
@@ -949,10 +968,8 @@ class Checker:
             self.check_block(stmt.else_branch)
 
     def resolve_type(self, name: str, line: int, col: int) -> str:
-        if name == I32:
-            return I32
-        if name == BOOL:
-            return BOOL
+        if name in NUMERIC_TYPES or name == BOOL:
+            return name
         if name in self.structs:
             return name
         raise Diagnostic(
@@ -961,34 +978,17 @@ class Checker:
             self.path,
             line,
             col,
-            "known types: `i32`, `bool`, and declared struct types",
+            "known types: the integer types, `bool`, and declared struct types",
         )
 
     def check_let(self, stmt: Let) -> None:
         declared = self.resolve_type(stmt.declared_type, stmt.line, stmt.col)
-        actual = self.infer(stmt.value)
-        if actual != declared:
-            raise Diagnostic(
-                "CRX0014",
-                f"type mismatch: `{stmt.name}` is declared `{declared}` "
-                f"but its initializer has type `{actual}`",
-                self.path,
-                stmt.value.line,
-                stmt.value.col,
-            )
+        self.check(stmt.value, declared)
         self.scope[stmt.name] = (declared, stmt.is_mut)
 
     def check_return(self, stmt: Return) -> None:
-        actual = self.infer(stmt.value)
-        if actual != I32:
-            raise Diagnostic(
-                "CRX0014",
-                f"`main` must return `i32`, found `{actual}`",
-                self.path,
-                stmt.value.line,
-                stmt.value.col,
-                "return an `i32` value, e.g. `return 0;`",
-            )
+        # `main` returns i32 in every implemented milestone.
+        self.check(stmt.value, I32)
 
     def check_expr_stmt(self, stmt: ExprStmt) -> None:
         expr = stmt.expr
@@ -1032,18 +1032,126 @@ class Checker:
                 'pass a string literal, e.g. `println("hello")`',
             )
 
-    def infer(self, expr: Node) -> str:
+    def range_check(self, value: int, t: str, node: Node) -> None:
+        lo, hi = INT_RANGE[t]
+        if not (lo <= value <= hi):
+            raise Diagnostic(
+                "CRX0036",
+                f"integer literal {value} is out of range for `{t}` "
+                f"(valid range {lo}..={hi})",
+                self.path,
+                node.line,
+                node.col,
+            )
+
+    def _reject_negative(self, expr: Unary, expected: str) -> None:
+        if expected in UNSIGNED_TYPES:
+            raise Diagnostic(
+                "CRX0037",
+                f"unary `-` cannot be applied to the unsigned type `{expected}`",
+                self.path,
+                expr.line,
+                expr.col,
+                "negation yields a signed value; use a signed type",
+            )
+        raise Diagnostic(
+            "CRX0014",
+            f"expected `{expected}`, found a negated integer",
+            self.path,
+            expr.line,
+            expr.col,
+        )
+
+    def check(self, expr: Node, expected: str) -> str:
+        """Check `expr` against an expected type, pushing it into literals."""
+        # Negative integer literal: range-check the negated value as a whole, so
+        # e.g. `i8 = -128` is valid even though `128` alone overflows i8.
+        if (
+            isinstance(expr, Unary)
+            and expr.op == "-"
+            and isinstance(expr.operand, IntLit)
+        ):
+            if expected not in SIGNED_TYPES:
+                self._reject_negative(expr, expected)
+            self.range_check(-int(expr.operand.value), expected, expr)
+            return expected
         if isinstance(expr, IntLit):
-            value = int(expr.value)
-            if not (-(2**31) <= value <= 2**31 - 1):
+            if expected not in NUMERIC_TYPES:
                 raise Diagnostic(
                     "CRX0014",
-                    f"integer literal {value} does not fit in `i32`",
+                    f"expected `{expected}`, found an integer literal",
                     self.path,
                     expr.line,
                     expr.col,
                 )
+            self.range_check(int(expr.value), expected, expr)
+            return expected
+        if isinstance(expr, Unary) and expr.op == "-":
+            if expected not in SIGNED_TYPES:
+                self._reject_negative(expr, expected)
+            self.check(expr.operand, expected)
+            expr.rtype = expected
+            return expected
+        if isinstance(expr, Binary) and expr.op in ARITH_OPS:
+            if expected not in NUMERIC_TYPES:
+                raise Diagnostic(
+                    "CRX0014",
+                    f"arithmetic yields a numeric type, but `{expected}` is expected",
+                    self.path,
+                    expr.line,
+                    expr.col,
+                )
+            self.check(expr.left, expected)
+            self.check(expr.right, expected)
+            expr.rtype = expected
+            return expected
+        if isinstance(expr, Binary) and expr.op in CMP_OPS:
+            if expected != BOOL:
+                raise Diagnostic(
+                    "CRX0014",
+                    f"comparison yields `bool`, but `{expected}` is expected",
+                    self.path,
+                    expr.line,
+                    expr.col,
+                )
+            self.check_comparison_operands(expr)
+            return BOOL
+        actual = self.synth(expr)
+        if actual != expected:
+            raise Diagnostic(
+                "CRX0014",
+                f"type mismatch: expected `{expected}`, found `{actual}`",
+                self.path,
+                expr.line,
+                expr.col,
+            )
+        return expected
+
+    def synth(self, expr: Node) -> str:
+        """Synthesize a type with no external context (literals default i32)."""
+        if (
+            isinstance(expr, Unary)
+            and expr.op == "-"
+            and isinstance(expr.operand, IntLit)
+        ):
+            self.range_check(-int(expr.operand.value), I32, expr)
             return I32
+        if isinstance(expr, IntLit):
+            self.range_check(int(expr.value), I32, expr)
+            return I32
+        if isinstance(expr, Unary) and expr.op == "-":
+            t = self.synth(expr.operand)
+            if t not in SIGNED_TYPES:
+                raise Diagnostic(
+                    "CRX0037",
+                    f"unary `-` cannot be applied to `{t}`",
+                    self.path,
+                    expr.line,
+                    expr.col,
+                    "unary `-` requires a signed integer type",
+                )
+            expr.rtype = t
+            return t
         if isinstance(expr, VarRef):
             if expr.name not in self.scope:
                 raise Diagnostic(
@@ -1056,7 +1164,7 @@ class Checker:
                 )
             return self.scope[expr.name][0]
         if isinstance(expr, FieldAccess):
-            obj_type = self.infer(expr.obj)
+            obj_type = self.synth(expr.obj)
             if obj_type not in self.structs:
                 raise Diagnostic(
                     "CRX0026",
@@ -1076,21 +1184,13 @@ class Checker:
                 expr.line,
                 expr.col,
             )
-        if isinstance(expr, Unary):
-            operand = self.infer(expr.operand)
-            if operand != I32:
-                raise Diagnostic(
-                    "CRX0028",
-                    f"unary `-` requires an `i32` operand, found `{operand}`",
-                    self.path,
-                    expr.operand.line,
-                    expr.operand.col,
-                )
-            return I32
-        if isinstance(expr, Binary):
-            return self.infer_binary(expr)
+        if isinstance(expr, Binary) and expr.op in ARITH_OPS:
+            return self.synth_binary_numeric(expr)
+        if isinstance(expr, Binary) and expr.op in CMP_OPS:
+            self.check_comparison_operands(expr)
+            return BOOL
         if isinstance(expr, StructLit):
-            return self.infer_struct_lit(expr)
+            return self.synth_struct_lit(expr)
         if isinstance(expr, StrLit):
             raise Diagnostic(
                 "CRX0015",
@@ -1106,35 +1206,96 @@ class Checker:
             "CRX0015", "unsupported expression", self.path, expr.line, expr.col
         )
 
-    def infer_binary(self, expr: Binary) -> str:
-        left = self.infer(expr.left)
-        right = self.infer(expr.right)
-        if expr.op in ARITH_OPS:
-            if left != I32 or right != I32:
-                bad = expr.left if left != I32 else expr.right
+    def _require_numeric(self, t: str, node: Node, code: str, what: str) -> None:
+        if t not in NUMERIC_TYPES:
+            raise Diagnostic(
+                code,
+                f"{what} requires numeric operands, found `{t}`",
+                self.path,
+                node.line,
+                node.col,
+            )
+
+    def synth_binary_numeric(self, expr: Binary) -> str:
+        # Determine the common operand type, letting a literal adopt the type of
+        # a non-literal sibling. Both operands end up the same numeric type.
+        left, right = expr.left, expr.right
+        lflex, rflex = is_literalish(left), is_literalish(right)
+        what = f"arithmetic `{expr.op}`"
+        if lflex and not rflex:
+            t = self.synth(right)
+            self._require_numeric(t, right, "CRX0028", what)
+            self.check(left, t)
+        elif rflex and not lflex:
+            t = self.synth(left)
+            self._require_numeric(t, left, "CRX0028", what)
+            self.check(right, t)
+        elif lflex and rflex:
+            self.check(left, I32)
+            self.check(right, I32)
+            t = I32
+        else:
+            lt, rt = self.synth(left), self.synth(right)
+            if lt not in NUMERIC_TYPES or rt not in NUMERIC_TYPES:
+                bad = left if lt not in NUMERIC_TYPES else right
                 raise Diagnostic(
                     "CRX0028",
-                    f"arithmetic `{expr.op}` requires `i32` operands, "
-                    f"found `{left}` and `{right}`",
+                    f"{what} requires numeric operands, found `{lt}` and `{rt}`",
                     self.path,
                     bad.line,
                     bad.col,
                 )
-            return I32
-        # Comparison operator.
-        if left != I32 or right != I32:
-            bad = expr.left if left != I32 else expr.right
-            raise Diagnostic(
-                "CRX0029",
-                f"comparison `{expr.op}` requires `i32` operands, "
-                f"found `{left}` and `{right}`",
-                self.path,
-                bad.line,
-                bad.col,
-            )
-        return BOOL
+            if lt != rt:
+                raise Diagnostic(
+                    "CRX0035",
+                    f"{what} requires both operands to have the same type, "
+                    f"found `{lt}` and `{rt}`",
+                    self.path,
+                    expr.line,
+                    expr.col,
+                    "CRusty++ has no implicit numeric conversion",
+                )
+            t = lt
+        expr.rtype = t
+        return t
 
-    def infer_struct_lit(self, lit: StructLit) -> str:
+    def check_comparison_operands(self, expr: Binary) -> None:
+        left, right = expr.left, expr.right
+        lflex, rflex = is_literalish(left), is_literalish(right)
+        what = f"comparison `{expr.op}`"
+        if lflex and not rflex:
+            t = self.synth(right)
+            self._require_numeric(t, right, "CRX0029", what)
+            self.check(left, t)
+        elif rflex and not lflex:
+            t = self.synth(left)
+            self._require_numeric(t, left, "CRX0029", what)
+            self.check(right, t)
+        elif lflex and rflex:
+            self.check(left, I32)
+            self.check(right, I32)
+        else:
+            lt, rt = self.synth(left), self.synth(right)
+            if lt not in NUMERIC_TYPES or rt not in NUMERIC_TYPES:
+                bad = left if lt not in NUMERIC_TYPES else right
+                raise Diagnostic(
+                    "CRX0029",
+                    f"{what} requires numeric operands, found `{lt}` and `{rt}`",
+                    self.path,
+                    bad.line,
+                    bad.col,
+                )
+            if lt != rt:
+                raise Diagnostic(
+                    "CRX0029",
+                    f"{what} requires both operands to have the same type, "
+                    f"found `{lt}` and `{rt}`",
+                    self.path,
+                    expr.line,
+                    expr.col,
+                )
+
+    def synth_struct_lit(self, lit: StructLit) -> str:
         if lit.type_name not in self.structs:
             raise Diagnostic(
                 "CRX0022",
@@ -1174,15 +1335,7 @@ class Checker:
                     lit.line,
                     lit.col,
                 )
-            actual = self.infer(given[fld.name])
-            if actual != fld.type_name:
-                raise Diagnostic(
-                    "CRX0014",
-                    f"field `{fld.name}` expects `{fld.type_name}`, found `{actual}`",
-                    self.path,
-                    given[fld.name].line,
-                    given[fld.name].col,
-                )
+            self.check(given[fld.name], fld.type_name)
         return lit.type_name
 
 
@@ -1190,57 +1343,135 @@ class Checker:
 # C emitter — readable, portable C.
 # ---------------------------------------------------------------------------
 
+# Runtime helper definitions are generated per (op, type) on demand; `panic` is
+# pulled in by any checked helper.
 ARITH_HELPER = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
 
-# Runtime helper definitions. Emitted only when referenced; `panic` is pulled in
-# by any checked helper. Order here is the emission order.
-HELPER_DEFS: dict[str, str] = {
-    "panic": (
-        "static void crx_panic(const char *msg) {\n"
-        '    fprintf(stderr, "panic: %s\\n", msg);\n'
-        "    exit(101);\n"
-        "}"
-    ),
-    "add": (
-        "static int32_t crx_checked_add_i32(int32_t a, int32_t b) {\n"
-        "    int64_t r = (int64_t)a + (int64_t)b;\n"
-        '    if (r < INT32_MIN || r > INT32_MAX) crx_panic("i32 addition overflow");\n'
-        "    return (int32_t)r;\n"
-        "}"
-    ),
-    "sub": (
-        "static int32_t crx_checked_sub_i32(int32_t a, int32_t b) {\n"
-        "    int64_t r = (int64_t)a - (int64_t)b;\n"
-        '    if (r < INT32_MIN || r > INT32_MAX) crx_panic("i32 subtraction overflow");\n'
-        "    return (int32_t)r;\n"
-        "}"
-    ),
-    "mul": (
-        "static int32_t crx_checked_mul_i32(int32_t a, int32_t b) {\n"
-        "    int64_t r = (int64_t)a * (int64_t)b;\n"
-        '    if (r < INT32_MIN || r > INT32_MAX) crx_panic("i32 multiplication overflow");\n'
-        "    return (int32_t)r;\n"
-        "}"
-    ),
-    "div": (
-        "static int32_t crx_checked_div_i32(int32_t a, int32_t b) {\n"
-        '    if (b == 0) crx_panic("i32 division by zero");\n'
-        '    if (a == INT32_MIN && b == -1) crx_panic("i32 division overflow");\n'
-        "    return a / b;\n"
-        "}"
-    ),
-    "neg": (
-        "static int32_t crx_checked_neg_i32(int32_t a) {\n"
-        '    if (a == INT32_MIN) crx_panic("i32 negation overflow");\n'
-        "    return -a;\n"
-        "}"
-    ),
+C_TYPE = {
+    "i8": "int8_t", "i16": "int16_t", "i32": "int32_t", "i64": "int64_t",
+    "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
+    "usize": "size_t",
 }
+FIXED_WIDTH = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"}
+SIGNED_NARROW = {"i8", "i16", "i32"}
+SIGNED_WIDE = {"i64"}
+UNSIGNED_NARROW = {"u8", "u16", "u32"}
+UNSIGNED_WIDE = {"u64", "usize"}
+
+_SMIN = {"i8": "INT8_MIN", "i16": "INT16_MIN", "i32": "INT32_MIN", "i64": "INT64_MIN"}
+_SMAX = {"i8": "INT8_MAX", "i16": "INT16_MAX", "i32": "INT32_MAX", "i64": "INT64_MAX"}
+_UMAX = {
+    "u8": "UINT8_MAX", "u16": "UINT16_MAX", "u32": "UINT32_MAX",
+    "u64": "UINT64_MAX", "usize": "SIZE_MAX",
+}
+
+PANIC_DEF = (
+    "static void crx_panic(const char *msg) {\n"
+    '    fprintf(stderr, "panic: %s\\n", msg);\n'
+    "    exit(101);\n"
+    "}"
+)
+
+# Word used in panic messages, e.g. "i32 addition overflow".
+_OP_WORD = {"add": "addition", "sub": "subtraction", "mul": "multiplication"}
+_C_OP = {"add": "+", "sub": "-", "mul": "*"}
+
+TYPE_ORDER = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize"]
+OP_ORDER = ["add", "sub", "mul", "div", "neg"]
+
+
+def gen_helper(op: str, t: str) -> str:
+    """Generate the C definition of a checked-arithmetic helper for (op, type)."""
+    ct = C_TYPE[t]
+    fn = f"crx_checked_{op}_{t}"
+    if op in ("add", "sub", "mul"):
+        cop, word = _C_OP[op], _OP_WORD[op]
+        msg = f'crx_panic("{t} {word} overflow");'
+        if t in SIGNED_NARROW:
+            return (
+                f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                f"    int64_t r = (int64_t)a {cop} (int64_t)b;\n"
+                f"    if (r < {_SMIN[t]} || r > {_SMAX[t]}) {msg}\n"
+                f"    return ({ct})r;\n}}"
+            )
+        if t in UNSIGNED_NARROW:
+            return (
+                f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                f"    uint64_t r = (uint64_t)a {cop} (uint64_t)b;\n"
+                f"    if (r > {_UMAX[t]}) {msg}\n"
+                f"    return ({ct})r;\n}}"
+            )
+        if t in UNSIGNED_WIDE:
+            if op == "sub":
+                return (
+                    f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                    f"    if (a < b) {msg}\n"
+                    f"    return a - b;\n}}"
+                )
+            if op == "add":
+                return (
+                    f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                    f"    {ct} r = a + b;\n"
+                    f"    if (r < a) {msg}\n"
+                    f"    return r;\n}}"
+                )
+            return (  # mul
+                f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                f"    {ct} r = a * b;\n"
+                f"    if (a != 0 && r / a != b) {msg}\n"
+                f"    return r;\n}}"
+            )
+        # signed wide (i64)
+        if op == "add":
+            return (
+                f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                f"    if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b))\n"
+                f"        {msg}\n"
+                f"    return a + b;\n}}"
+            )
+        if op == "sub":
+            return (
+                f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                f"    if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b))\n"
+                f"        {msg}\n"
+                f"    return a - b;\n}}"
+            )
+        return (  # i64 mul
+            f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+            f"    if (a > 0) {{\n"
+            f"        if (b > 0) {{ if (a > INT64_MAX / b) {msg} }}\n"
+            f"        else {{ if (b < INT64_MIN / a) {msg} }}\n"
+            f"    }} else {{\n"
+            f"        if (b > 0) {{ if (a < INT64_MIN / b) {msg} }}\n"
+            f"        else {{ if (a != 0 && b < INT64_MAX / a) {msg} }}\n"
+            f"    }}\n"
+            f"    return a * b;\n}}"
+        )
+    if op == "div":
+        zero = f'crx_panic("{t} division by zero");'
+        if t in SIGNED_NARROW or t in SIGNED_WIDE:
+            return (
+                f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+                f"    if (b == 0) {zero}\n"
+                f'    if (a == {_SMIN[t]} && b == -1) crx_panic("{t} division overflow");\n'
+                f"    return a / b;\n}}"
+            )
+        return (
+            f"static {ct} {fn}({ct} a, {ct} b) {{\n"
+            f"    if (b == 0) {zero}\n"
+            f"    return a / b;\n}}"
+        )
+    # op == "neg" (signed only)
+    return (
+        f"static {ct} {fn}({ct} a) {{\n"
+        f'    if (a == {_SMIN[t]}) crx_panic("{t} negation overflow");\n'
+        f"    return -a;\n}}"
+    )
 
 
 def c_type(t: str) -> str:
-    if t == I32:
-        return "int32_t"
+    if t in C_TYPE:
+        return C_TYPE[t]
     if t == BOOL:
         return "bool"
     return t  # struct name -> its typedef
@@ -1271,28 +1502,46 @@ class Emitter:
         self.main = main
         self.source_path = source_path
         self.includes: set[str] = set()
-        self.helpers: set[str] = set()
+        self.helpers: set[tuple[str, str]] = set()  # (op, type)
+        self.need_panic = False
 
-    def use_checked(self, helper: str) -> None:
-        self.helpers.add(helper)
-        self.helpers.add("panic")
+    def add_type_include(self, t: str) -> None:
+        if t in FIXED_WIDTH:
+            self.includes.add("stdint.h")
+        elif t == "usize":
+            self.includes.add("stddef.h")
+        elif t == BOOL:
+            self.includes.add("stdbool.h")
+
+    def use_checked(self, op: str, t: str) -> None:
+        self.helpers.add((op, t))
+        self.need_panic = True
         self.includes |= {"stdint.h", "stdio.h", "stdlib.h"}
+        if t == "usize":
+            self.includes.add("stddef.h")
 
     def expr(self, node: Node) -> str:
         if isinstance(node, IntLit):
-            return str(int(node.value))
+            v = int(node.value)
+            # A value beyond signed 64-bit range is only valid in an unsigned
+            # context; add a `u` suffix so C does not warn about its type.
+            return f"{v}u" if v > 2**63 - 1 else str(v)
         if isinstance(node, VarRef):
             return node.name
         if isinstance(node, FieldAccess):
             return f"{self.expr(node.obj)}.{node.field_name}"
         if isinstance(node, Unary):  # only "-"
-            self.use_checked("neg")
-            return f"crx_checked_neg_i32({self.expr(node.operand)})"
+            if isinstance(node.operand, IntLit):
+                # Negative literal: emit the constant directly (no neg helper).
+                return f"(-{node.operand.value})"
+            self.use_checked("neg", node.rtype)
+            return f"crx_checked_neg_{node.rtype}({self.expr(node.operand)})"
         if isinstance(node, Binary):
             if node.op in ARITH_HELPER:
                 name = ARITH_HELPER[node.op]
-                self.use_checked(name)
-                return f"crx_checked_{name}_i32({self.expr(node.left)}, {self.expr(node.right)})"
+                t = node.rtype
+                self.use_checked(name, t)
+                return f"crx_checked_{name}_{t}({self.expr(node.left)}, {self.expr(node.right)})"
             return f"({self.expr(node.left)} {node.op} {self.expr(node.right)})"
         if isinstance(node, StructLit):
             parts = ", ".join(
@@ -1306,7 +1555,7 @@ class Emitter:
     def stmt(self, node: Node, indent: int) -> list[str]:
         pad = "    " * indent
         if isinstance(node, Let):
-            self.includes.add("stdbool.h" if node.declared_type == BOOL else "stdint.h")
+            self.add_type_include(node.declared_type)
             return [f"{pad}{c_type(node.declared_type)} {node.name} = {self.expr(node.value)};"]
         if isinstance(node, Assign):
             assert isinstance(node.target, VarRef)
@@ -1353,18 +1602,22 @@ class Emitter:
 
         struct_lines: list[str] = []
         for decl in self.program.structs:
-            self.includes.add("stdint.h")
             struct_lines.append(f"typedef struct {decl.name} {{")
             for fld in decl.fields:
+                self.add_type_include(fld.type_name)
                 struct_lines.append(f"    {c_type(fld.type_name)} {fld.name};")
             struct_lines.append(f"}} {decl.name};")
             struct_lines.append("")
 
         helper_lines: list[str] = []
-        for name in HELPER_DEFS:  # fixed order
-            if name in self.helpers:
-                helper_lines.append(HELPER_DEFS[name])
-                helper_lines.append("")
+        if self.need_panic:
+            helper_lines.append(PANIC_DEF)
+            helper_lines.append("")
+        for t in TYPE_ORDER:
+            for op in OP_ORDER:
+                if (op, t) in self.helpers:
+                    helper_lines.append(gen_helper(op, t))
+                    helper_lines.append("")
 
         lines: list[str] = []
         lines.append(f"/* Generated by crustc (CRusty++ v0.1) from {self.source_path} */")

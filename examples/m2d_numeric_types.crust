@@ -1,0 +1,47 @@
+// m2d_numeric_types.crust
+//
+// M2D target: the full integer type set (i8..i64, u8..u64, usize) plus bool,
+// with typed integer literals, same-type checked arithmetic, same-type
+// comparisons, and a struct with non-i32 numeric fields. No casts, no I/O.
+//
+// Returns 0 on success (all checks hold).
+
+struct Header {
+    magic: u8,
+    version: u16,
+    length: u32,
+    checksum: u64,
+}
+
+fn main() -> i32 {
+    // Signed widths, with checked arithmetic on matching types.
+    let s8: i8 = -100 + 27;                  // -73
+    let s16: i16 = 1000 - 1;                 // 999
+    let s32: i32 = 2000000000 - 1;           // 1999999999
+    let s64: i64 = 9000000000 + 1;           // 9000000001
+
+    // Unsigned widths.
+    let u_8: u8 = 200 + 55;                  // 255 (no overflow)
+    let u_16: u16 = 60000 - 1;               // 59999
+    let u_32: u32 = 4000000000 - 1;          // 3999999999
+    let u_64: u64 = 18000000000000000000 + 1;
+    let sz: usize = 4096 * 2;                // 8192
+
+    // A struct with non-i32 numeric fields.
+    let h: Header = Header { magic: 255, version: 2, length: 1024, checksum: 100000 };
+
+    // Same-type comparisons, each yielding bool. Any failure sets result to 1.
+    let mut result: i32 = 0;
+    if s8 < 0 { } else { result = 1; }                  // i8
+    if s16 == 999 { } else { result = 1; }              // i16
+    if s32 > 0 { } else { result = 1; }                 // i32
+    if s64 > 9000000000 { } else { result = 1; }        // i64
+    if u_8 == 255 { } else { result = 1; }              // u8
+    if u_16 < 60000 { } else { result = 1; }            // u16
+    if u_32 > 0 { } else { result = 1; }                // u32
+    if u_64 > 0 { } else { result = 1; }                // u64
+    if sz == 8192 { } else { result = 1; }              // usize
+    if h.checksum == 100000 { } else { result = 1; }    // u64 struct field
+
+    return result;
+}

@@ -2,7 +2,7 @@
 
 The CRusty++ conformance test suite.
 
-**Status: M1 + M2A + M2B + M2C harnesses in place.**
+**Status: M1 + M2A + M2B + M2C + M2D harnesses in place.**
 
 Acceptance tests (compile → build → run → assert golden C + exit code):
 
@@ -10,20 +10,23 @@ Acceptance tests (compile → build → run → assert golden C + exit code):
 - [`m2a_structs.py`](./m2a_structs.py) — `m2_structs.crust`; no stdout, exit `0`.
 - [`m2b_checked_if.py`](./m2b_checked_if.py) — `m2b_checked_if.crust`; exit `0`.
 - [`m2c_loops.py`](./m2c_loops.py) — `m2c_loops.crust`; exit `0`.
+- [`m2d_numeric.py`](./m2d_numeric.py) — `m2d_numeric_types.crust`; exit `0`.
 
 Behavior tests (runtime exit-code assertions):
 
-- [`m2b_behavior.py`](./m2b_behavior.py) — each program in [`behavior/`](./behavior/)
-  triggers a checked-arithmetic fault and must exit `101`: `add_overflow`,
-  `sub_overflow`, `mul_overflow`, `div_zero`, `div_overflow`, `neg_overflow`.
+- [`m2b_behavior.py`](./m2b_behavior.py) — six `i32` checked-arithmetic faults in
+  [`behavior/`](./behavior/), each must exit `101`.
 
-Diagnostic + control-flow tests:
+Diagnostic + control-flow + numeric tests:
 
-- [`m2c_diagnostics.py`](./m2c_diagnostics.py) — negative cases assert a specific
-  error code + exit `1` (assign-to-immutable `CRX0031`, wrong-type assign
-  `CRX0014`, `break`/`continue` outside loop `CRX0033`/`CRX0034`, non-`bool`
-  `while` `CRX0030`); positive cases build and run `loop_break.crust` and
-  `continue_skip.crust` asserting exit `0`.
+- [`m2c_diagnostics.py`](./m2c_diagnostics.py) — 5 negative compile cases
+  (`CRX0031`, `CRX0014`, `CRX0033`, `CRX0034`, `CRX0030`) + 2 positive runtime
+  cases (`loop_break`, `continue_skip`, exit `0`).
+- [`m2d_checks.py`](./m2d_checks.py) — runtime panics for `u8`/`i8` overflow,
+  `u8` underflow, `i8` negation overflow, and `u64` divide-by-zero (all exit
+  `101`); a `usize` local + struct-field program (exit `0`); and negative
+  compile cases for mixed arithmetic (`CRX0035`), mixed comparison (`CRX0029`),
+  unsigned unary minus (`CRX0037`), and out-of-range literal (`CRX0036`).
 
 Goldens live in [`golden/`](./golden/) (one `.c` per acceptance example) for the
 codegen stability checks.
@@ -31,7 +34,8 @@ codegen stability checks.
 Run them all:
 
 ```sh
-for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops m2c_diagnostics; do
+for t in m1_hello m2a_structs m2b_checked_if m2b_behavior \
+         m2c_loops m2c_diagnostics m2d_numeric m2d_checks; do
     python3 tests/$t.py || break
 done
 ```

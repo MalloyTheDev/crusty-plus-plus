@@ -1,0 +1,6 @@
+// Behavior: u64 division by zero must abort with exit 101.
+fn main() -> i32 {
+    let z: u64 = 0;
+    let r: u64 = 1 / z;    // division by zero -> panic
+    return 0;
+}

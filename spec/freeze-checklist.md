@@ -148,10 +148,24 @@ CRX0031 (assign to immutable), CRX0032 (invalid assignment target), CRX0033
 (`break` outside loop), CRX0034 (`continue` outside loop); CRX0030 now also covers
 non-`bool` `while` conditions.
 
-> **M2 is not complete.** The M2 acceptance set still needs M2D (remaining integer
-> widths, `as` casts, `&& || !`, `%`) before the language layer for M3 (slices,
-> `Result`/`Option`, `?`, I/O) can land. Specs remain **FREEZE-CANDIDATE**, not
-> FROZEN.
+**M2D — full numeric type set.** ✅ `i8`…`i64`, `u8`…`u64`, `usize` (plus `bool`
+from M2B). Integer literals are context-typed (default `i32`) and range-checked
+against their target type; negative literals are range-checked as a whole.
+Arithmetic and comparison operands must be the **exact same** numeric type (no
+implicit promotion, sign mix, or width mix); unary `-` is signed-only. Checked
+arithmetic now covers every width via per-type `crx_checked_<op>_<type>` helpers
+(narrow types widen to 64-bit; 64-bit types use range/wraparound guards). Struct
+fields may be any numeric type or `bool`. Target `examples/m2d_numeric_types.crust`
+(`tests/m2d_numeric.py`, exit `0`) plus `tests/m2d_checks.py` (5 runtime-101
+cases, 1 usize-positive, 4 negative compile cases). New diagnostics CRX0035
+(mixed arithmetic), CRX0036 (literal out of range), CRX0037 (unsigned unary `-`);
+CRX0028/CRX0029 generalized from "non-i32" to "non-numeric / mixed type".
+
+> **M2 is not complete.** The numeric/checked-arithmetic gap is now fully closed,
+> but the M2 acceptance set still needs **M2E** (`as` casts, `&& || !`, `%`)
+> before the M3 language layer (slices, `Result`/`Option`, `?`, I/O) can land.
+> `usize` literal range-checking assumes a 64-bit `size_t` (documented in
+> `compiler/crustc.py`). Specs remain **FREEZE-CANDIDATE**, not FROZEN.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

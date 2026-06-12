@@ -2,8 +2,8 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestones M1 + M2A + M2B + M2C implemented.** `crustc.py` compiles the
-strict M1–M2C subset end-to-end to portable C:
+**Status: milestones M1 + M2A + M2B + M2C + M2D implemented.** `crustc.py`
+compiles the strict M1–M2D subset end-to-end to portable C:
 
 - **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
   return.
@@ -14,6 +14,10 @@ strict M1–M2C subset end-to-end to portable C:
   divide-by-zero, and negation overflow abort with exit code **101**).
 - **M2C** — [`../examples/m2c_loops.crust`](../examples/m2c_loops.crust): `let mut`,
   assignment statements, and `while` / `loop` / `break` / `continue`.
+- **M2D** — [`../examples/m2d_numeric_types.crust`](../examples/m2d_numeric_types.crust):
+  the full integer type set (`i8`…`i64`, `u8`…`u64`, `usize`) with context-typed
+  literals, same-type-only checked arithmetic/comparisons, and non-`i32` struct
+  fields.
 
 Everything beyond this subset is intentionally rejected with a diagnostic, not
 parsed — the compiler never accepts more than the spec defines.
@@ -25,13 +29,10 @@ parsed — the compiler never accepts more than the spec defines.
 ## Usage
 
 ```sh
-# Emit C to stdout:
-python3 compiler/crustc.py examples/m2c_loops.crust
-
-# Emit C to a file / build / build-and-run:
-python3 compiler/crustc.py examples/m2c_loops.crust --emit-c build/m2c.c
-python3 compiler/crustc.py examples/m2c_loops.crust --build build/m2c
-python3 compiler/crustc.py examples/m2c_loops.crust --run
+# Emit C to stdout / file, build, build-and-run:
+python3 compiler/crustc.py examples/m2d_numeric_types.crust
+python3 compiler/crustc.py examples/m2d_numeric_types.crust --emit-c build/m2d.c
+python3 compiler/crustc.py examples/m2d_numeric_types.crust --run
 
 # Acceptance + behavior + diagnostic checks:
 python3 tests/m1_hello.py
@@ -40,6 +41,8 @@ python3 tests/m2b_checked_if.py
 python3 tests/m2b_behavior.py
 python3 tests/m2c_loops.py
 python3 tests/m2c_diagnostics.py
+python3 tests/m2d_numeric.py
+python3 tests/m2d_checks.py
 ```
 
 ## Grammar (exactly what `crustc` accepts today)
@@ -49,7 +52,7 @@ program     = item+                           ; must contain exactly `main`
 item        = struct_decl | function
 struct_decl = "struct" ident "{" sfields? "}"
 sfields     = sfield ("," sfield)* ","?
-sfield      = ident ":" type                  ; field types: i32 only
+sfield      = ident ":" type                  ; field types: numeric or bool
 function    = "fn" "main" "(" ")" "->" "i32" block
 block       = "{" statement* "}"
 statement   = let_stmt | assign_stmt | return_stmt | if_stmt
@@ -72,7 +75,9 @@ primary     = int_lit | string_lit | "(" expr ")"
             | ident                            ; variable
             | ident "{" finits? "}"            ; struct literal (not in a condition)
 finits      = ident ":" expr ("," ident ":" expr)* ","?
-type        = "i32" | "bool" | <declared struct name>
+type        = numeric_type | "bool" | <declared struct name>
+numeric_type = "i8" | "i16" | "i32" | "i64"
+             | "u8" | "u16" | "u32" | "u64" | "usize"
 ```
 
 Notes: an `ident {` immediately inside an `if`/`while` condition is the block
@@ -82,25 +87,37 @@ assignment); `break`/`continue` are valid only inside a loop.
 
 This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
 parameters, `%`, `&& || !`, `as` casts, field assignment, slices, `Result`/
-`Option`, `?`, struct-typed fields, integer types other than `i32`, and any
-function other than `main` are **rejected** (see Diagnostics). They arrive in
-later milestones (see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md)
-and the M2D recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+`Option`, `?`, struct-typed fields, and any function other than `main` are
+**rejected** (see Diagnostics). They arrive in later milestones (see
+[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2E
+recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+
+## Numeric type rules (M2D)
+
+- **Types:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `usize` (`size_t`), plus `bool`.
+- **Literal typing:** an integer literal is context-typed (from the `let`/field/
+  operand it flows into) and defaults to `i32` with no context. A literal must
+  fit its target type or it is a compile-time error (`CRX0036`). A negative
+  literal is unary `-` over a positive literal, range-checked as a whole — so
+  `i8 = -128` and `i32 = -2147483648` are valid even though `128`/`2147483648`
+  alone overflow.
+- **Same-type only:** arithmetic and comparison operands must have the **exact
+  same** numeric type — no implicit promotion, no mixed sign, no mixed width
+  (`CRX0035` / `CRX0029`). The result is that type (arithmetic) or `bool`
+  (comparison). Unary `-` is signed-only (`CRX0037`).
 
 ## Checked arithmetic
 
-`+ - * /` and unary `-` on `i32` lower to runtime helpers, **not** raw C
-operators, closing the M2A deferral. On overflow, divide-by-zero, or negation of
-`i32::MIN`, the helper calls `crx_panic`, which prints to stderr and `exit(101)`
-(abort-only; no unwinding, no catch). The helpers are:
+`+ - * /` and unary `-` lower to per-type runtime helpers
+(`crx_checked_<op>_<type>`), **not** raw C operators. On overflow, underflow,
+divide-by-zero, or `MIN`-negation/division, the helper calls `crx_panic`, which
+prints to stderr and `exit(101)` (abort-only; no unwinding, no catch). Narrow
+types are checked by widening to 64-bit; 64-bit types use range/wraparound
+guards. Each helper is emitted only when referenced.
 
-```
-crx_panic, crx_checked_add_i32, crx_checked_sub_i32,
-crx_checked_mul_i32, crx_checked_div_i32, crx_checked_neg_i32
-```
-
-Each is emitted only when referenced. `bool` lowers to C `<stdbool.h>`;
-comparisons lower to C comparison operators; `if`/`else` to C `if`/`else`.
+`bool` lowers to C `<stdbool.h>`; each integer type to its `<stdint.h>` /
+`<stddef.h>` fixed-width C type; comparisons to C comparison operators;
+`if`/`else` to C `if`/`else`.
 
 Control flow (M2C): `let mut` and assignment lower to ordinary C locals and `=`;
 `while` to C `while`; `loop` to `for (;;)`; `break`/`continue` to C
@@ -140,13 +157,16 @@ C source  →  system C compiler  →  executable
 | `CRX0025` | unknown field access |
 | `CRX0026` | field access on a non-struct value |
 | `CRX0027` | unknown variable |
-| `CRX0028` | invalid arithmetic operand type (non-`i32`) |
-| `CRX0029` | invalid comparison operand type (non-`i32`) |
+| `CRX0028` | non-numeric arithmetic operand |
+| `CRX0029` | non-numeric or mixed-type comparison operands |
 | `CRX0030` | non-`bool` `if` / `while` condition |
 | `CRX0031` | assignment to an immutable local |
 | `CRX0032` | invalid assignment target (field assignment / non-variable) |
 | `CRX0033` | `break` outside a loop |
 | `CRX0034` | `continue` outside a loop |
+| `CRX0035` | mixed-type arithmetic (operands differ in numeric type) |
+| `CRX0036` | integer literal out of range for its type |
+| `CRX0037` | unary `-` applied to an unsigned type |
 
 ---
 

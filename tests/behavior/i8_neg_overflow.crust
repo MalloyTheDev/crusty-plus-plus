@@ -1,0 +1,6 @@
+// Behavior: negating i8::MIN must abort with exit 101.
+fn main() -> i32 {
+    let a: i8 = -128;
+    let r: i8 = -a;        // -(-128) overflows i8 -> panic
+    return 0;
+}

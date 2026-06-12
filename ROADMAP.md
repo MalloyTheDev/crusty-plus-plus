@@ -37,8 +37,11 @@ conform. **No compiler code is written before this phase closes.**
 - [x] **M2C — mutability + loops.** `let mut`, assignment statements, and
       `while`/`loop`/`break`/`continue` → `examples/m2c_loops.crust`;
       `tests/m2c_loops.py` and `tests/m2c_diagnostics.py` pass.
-- [ ] M2D — remaining integer types and `as` casts (with per-width checked
-      arithmetic), `&& || !`, and `%`. (No I/O.)
+- [x] **M2D — full numeric type set.** `i8`…`i64`, `u8`…`u64`, `usize` with
+      context-typed literals, same-type-only checked arithmetic/comparisons, and
+      non-`i32` struct fields → `examples/m2d_numeric_types.crust`;
+      `tests/m2d_numeric.py` and `tests/m2d_checks.py` pass.
+- [ ] M2E — `as` casts (defined truncation/wrapping), `&& || !`, and `%`. (No I/O.)
 - [ ] M3 — slices (`str`, `[]u8`), `Result`/`Option`, `?`, prelude → compile
       `file_read.crust` and `crust_inspect.crust`.
 - [ ] Type checker for the full `v0.1` type set
