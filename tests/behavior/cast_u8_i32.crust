@@ -1,0 +1,6 @@
+// u8 200 widened to i32 yields 200 (zero-extend).
+fn main() -> i32 {
+    let a: u8 = 200;
+    let x: i32 = a as i32;
+    if x == 200 { return 0; } else { return 1; }
+}

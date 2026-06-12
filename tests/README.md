@@ -2,7 +2,7 @@
 
 The CRusty++ conformance test suite.
 
-**Status: M1 + M2A + M2B + M2C + M2D harnesses in place.**
+**Status: M1 + M2A + M2B + M2C + M2D + M2E harnesses in place.**
 
 Acceptance tests (compile → build → run → assert golden C + exit code):
 
@@ -11,6 +11,7 @@ Acceptance tests (compile → build → run → assert golden C + exit code):
 - [`m2b_checked_if.py`](./m2b_checked_if.py) — `m2b_checked_if.crust`; exit `0`.
 - [`m2c_loops.py`](./m2c_loops.py) — `m2c_loops.crust`; exit `0`.
 - [`m2d_numeric.py`](./m2d_numeric.py) — `m2d_numeric_types.crust`; exit `0`.
+- [`m2e_casts.py`](./m2e_casts.py) — `m2e_casts.crust`; exit `0`.
 
 Behavior tests (runtime exit-code assertions):
 
@@ -27,6 +28,11 @@ Diagnostic + control-flow + numeric tests:
   `101`); a `usize` local + struct-field program (exit `0`); and negative
   compile cases for mixed arithmetic (`CRX0035`), mixed comparison (`CRX0029`),
   unsigned unary minus (`CRX0037`), and out-of-range literal (`CRX0036`).
+- [`m2e_checks.py`](./m2e_checks.py) — six cast-value programs that self-check
+  their result and exit `0` (`300 as u8`, `-1 as u8`, `255 as i8`, `65535 as
+  i16`, `u8→i32`, `i8→i32`); and negative compile cases `bool as i32`
+  (`CRX0038`), `i32 as bool` (`CRX0039`), `struct as i32` (`CRX0038`),
+  `5 as Foo` (`CRX0021`).
 
 Goldens live in [`golden/`](./golden/) (one `.c` per acceptance example) for the
 codegen stability checks.
@@ -34,8 +40,8 @@ codegen stability checks.
 Run them all:
 
 ```sh
-for t in m1_hello m2a_structs m2b_checked_if m2b_behavior \
-         m2c_loops m2c_diagnostics m2d_numeric m2d_checks; do
+for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops \
+         m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks; do
     python3 tests/$t.py || break
 done
 ```

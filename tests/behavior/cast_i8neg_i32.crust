@@ -1,0 +1,6 @@
+// i8 -5 widened to i32 yields -5 (sign-extend).
+fn main() -> i32 {
+    let a: i8 = -5;
+    let x: i32 = a as i32;
+    if x == -5 { return 0; } else { return 1; }
+}

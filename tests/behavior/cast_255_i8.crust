@@ -1,0 +1,5 @@
+// 255 as i8 yields -1.
+fn main() -> i32 {
+    let x: i8 = 255 as i8;
+    if x == -1 { return 0; } else { return 1; }
+}

@@ -1,0 +1,44 @@
+// m2e_casts.crust
+//
+// M2E target: explicit numeric casts with `as` — the last numeric-system piece
+// before slices and binary parsing. Casts are the only way to narrow or
+// reinterpret a numeric value; they never panic. No `%`, no boolean logic.
+//
+// Returns 0 on success (every cast yields its defined value).
+
+fn main() -> i32 {
+    // signed -> signed, narrower -> wider (sign-extend)
+    let a8: i8 = -5;
+    let a32: i32 = a8 as i32;             // -5
+
+    // unsigned -> unsigned, narrower -> wider (zero-extend)
+    let b8: u8 = 200;
+    let b32: u32 = b8 as u32;             // 200
+
+    // signed -> unsigned (reinterpret modulo 2^8)
+    let c: u8 = -1 as u8;                 // 255
+
+    // unsigned -> signed, same width (reinterpret as two's complement)
+    let d: i8 = 255 as i8;                // -1
+
+    // wider -> narrower, unsigned target (truncate)
+    let e: u8 = 300 as u8;                // 44
+
+    // wider -> narrower, signed target (truncate + reinterpret)
+    let f: i16 = 65535 as i16;            // -1
+
+    // cast to usize
+    let g: usize = 1000 as usize;         // 1000
+
+    // use cast results in arithmetic and comparison
+    let sum: i32 = a32 + (b32 as i32);    // -5 + 200 == 195
+
+    let mut result: i32 = 0;
+    if c == 255 { } else { result = 1; }
+    if d < 0 { } else { result = 1; }     // -1 < 0
+    if e == 44 { } else { result = 1; }
+    if f == -1 { } else { result = 1; }
+    if g == 1000 { } else { result = 1; }
+    if sum == 195 { } else { result = 1; }
+    return result;
+}

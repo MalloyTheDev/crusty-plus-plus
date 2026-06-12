@@ -1,0 +1,5 @@
+// 65535 as i16 yields -1.
+fn main() -> i32 {
+    let x: i16 = 65535 as i16;
+    if x == -1 { return 0; } else { return 1; }
+}

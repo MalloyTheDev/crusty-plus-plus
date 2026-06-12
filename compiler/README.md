@@ -2,8 +2,8 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestones M1 + M2A + M2B + M2C + M2D implemented.** `crustc.py`
-compiles the strict M1–M2D subset end-to-end to portable C:
+**Status: milestones M1 + M2A + M2B + M2C + M2D + M2E implemented.** `crustc.py`
+compiles the strict M1–M2E subset end-to-end to portable C:
 
 - **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
   return.
@@ -18,6 +18,9 @@ compiles the strict M1–M2D subset end-to-end to portable C:
   the full integer type set (`i8`…`i64`, `u8`…`u64`, `usize`) with context-typed
   literals, same-type-only checked arithmetic/comparisons, and non-`i32` struct
   fields.
+- **M2E** — [`../examples/m2e_casts.crust`](../examples/m2e_casts.crust): explicit
+  numeric `as` casts (the only way to narrow or reinterpret a numeric value;
+  casts never panic).
 
 Everything beyond this subset is intentionally rejected with a diagnostic, not
 parsed — the compiler never accepts more than the spec defines.
@@ -30,9 +33,9 @@ parsed — the compiler never accepts more than the spec defines.
 
 ```sh
 # Emit C to stdout / file, build, build-and-run:
-python3 compiler/crustc.py examples/m2d_numeric_types.crust
-python3 compiler/crustc.py examples/m2d_numeric_types.crust --emit-c build/m2d.c
-python3 compiler/crustc.py examples/m2d_numeric_types.crust --run
+python3 compiler/crustc.py examples/m2e_casts.crust
+python3 compiler/crustc.py examples/m2e_casts.crust --emit-c build/m2e.c
+python3 compiler/crustc.py examples/m2e_casts.crust --run
 
 # Acceptance + behavior + diagnostic checks:
 python3 tests/m1_hello.py
@@ -43,6 +46,8 @@ python3 tests/m2c_loops.py
 python3 tests/m2c_diagnostics.py
 python3 tests/m2d_numeric.py
 python3 tests/m2d_checks.py
+python3 tests/m2e_casts.py
+python3 tests/m2e_checks.py
 ```
 
 ## Grammar (exactly what `crustc` accepts today)
@@ -68,7 +73,8 @@ expr        = equality
 equality    = relational (("==" | "!=") relational)*
 relational  = add (("<" | "<=" | ">" | ">=") add)*
 add         = mul (("+" | "-") mul)*
-mul         = unary (("*" | "/") unary)*
+mul         = cast (("*" | "/") cast)*
+cast        = unary ("as" type)*              ; explicit numeric cast
 unary       = "-" unary | postfix
 postfix     = primary ("." ident)*            ; field access
 primary     = int_lit | string_lit | "(" expr ")"
@@ -85,12 +91,45 @@ opener, not a struct literal (parenthesize if you need a struct literal there).
 Assignment is statement-only (no assignment expression, no `+=`, no field
 assignment); `break`/`continue` are valid only inside a loop.
 
+`as` binds **looser than unary `-`** but **tighter than `* /` and the other
+binary operators**: `-x as T` is `(-x) as T`; `a as T + b` is `(a as T) + b`.
+Casts are left-associative. Parenthesize for any other grouping.
+
 This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
-parameters, `%`, `&& || !`, `as` casts, field assignment, slices, `Result`/
-`Option`, `?`, struct-typed fields, and any function other than `main` are
-**rejected** (see Diagnostics). They arrive in later milestones (see
-[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2E
+parameters, `%`, `&& || !`, field assignment, slices, `Result`/`Option`, `?`,
+struct-typed fields, and any function other than `main` are **rejected** (see
+Diagnostics). They arrive in later milestones (see
+[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M3A
 recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+
+## Casts (M2E)
+
+`expr as Type` converts between numeric types only (`bool`/struct sources or
+targets are rejected: `CRX0038`/`CRX0039`). The source is type-checked on its own
+(so `300 as u8` is allowed even though `300` overflows `u8`). **Casts never
+panic** — they are the explicit escape valve from checked arithmetic. Semantics
+(defined two's-complement):
+
+| Cast | Result |
+|------|--------|
+| widen signed → signed | sign-extend |
+| widen unsigned → unsigned/wider signed | zero-extend |
+| signed → unsigned | reinterpret modulo 2^width |
+| narrow / same-width sign change | truncate to width, reinterpret |
+
+Examples: `300 as u8 == 44`, `-1 as u8 == 255`, `255 as i8 == -1`,
+`65535 as i16 == -1`.
+
+**Lowering:** casts to an unsigned type, and value-preserving widenings, lower to
+a direct C cast (both fully defined). Casts to a signed type whose value may not
+fit (narrowing, or a same-width unsigned source) lower through a
+`crx_cast_to_<itype>` helper that masks to the target width and reinterprets as
+two's complement, avoiding C's implementation-defined out-of-range signed
+conversion.
+
+**Target model:** `usize` is treated as **64-bit** (`size_t`) — the current build
+target. A future multi-target backend must make pointer width explicit; M2E does
+not solve cross-target `usize`.
 
 ## Numeric type rules (M2D)
 
@@ -167,6 +206,8 @@ C source  →  system C compiler  →  executable
 | `CRX0035` | mixed-type arithmetic (operands differ in numeric type) |
 | `CRX0036` | integer literal out of range for its type |
 | `CRX0037` | unary `-` applied to an unsigned type |
+| `CRX0038` | invalid cast source type (`bool` / struct) |
+| `CRX0039` | invalid cast target type (`bool` / struct) |
 
 ---
 

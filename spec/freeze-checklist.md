@@ -161,11 +161,24 @@ cases, 1 usize-positive, 4 negative compile cases). New diagnostics CRX0035
 (mixed arithmetic), CRX0036 (literal out of range), CRX0037 (unsigned unary `-`);
 CRX0028/CRX0029 generalized from "non-i32" to "non-numeric / mixed type".
 
-> **M2 is not complete.** The numeric/checked-arithmetic gap is now fully closed,
-> but the M2 acceptance set still needs **M2E** (`as` casts, `&& || !`, `%`)
-> before the M3 language layer (slices, `Result`/`Option`, `?`, I/O) can land.
-> `usize` literal range-checking assumes a 64-bit `size_t` (documented in
-> `compiler/crustc.py`). Specs remain **FREEZE-CANDIDATE**, not FROZEN.
+**M2E — explicit numeric casts.** ✅ `expr as Type` converts between numeric types
+only (`bool`/struct source or target → CRX0038/CRX0039; unknown target → CRX0021).
+The source is type-checked independently so `300 as u8` is legal. Casts are
+**total and never panic**, with defined two's-complement semantics: widen
+sign-/zero-extends, narrow truncates, sign changes reinterpret. Lowering uses a
+direct C cast where defined (unsigned target, value-preserving widening) and a
+`crx_cast_to_<itype>` reinterpretation helper otherwise. `as` binds looser than
+unary `-`, tighter than `* /` (a spec-precedence inconsistency between
+`syntax.md` §5 and §6.7 was corrected to match). Target
+`examples/m2e_casts.crust` (`tests/m2e_casts.py`, exit `0`) plus
+`tests/m2e_checks.py` (6 cast-value programs + 4 negative cases).
+
+> **M2 numeric system is complete; boolean/`%` layer is not.** Casts close the
+> last *numeric* foundation. Still deferred for later (not blocking M3A): `%`,
+> `&& || !`. The next milestone is **M3A** (slices: `str`, `[]u8`, `.len`).
+> `usize` is treated as 64-bit `size_t` (documented in `compiler/crustc.py` and
+> `compiler/README.md`); cross-target pointer width is future work. Specs remain
+> **FREEZE-CANDIDATE**, not FROZEN.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

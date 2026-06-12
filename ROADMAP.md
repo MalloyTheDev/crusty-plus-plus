@@ -41,9 +41,14 @@ conform. **No compiler code is written before this phase closes.**
       context-typed literals, same-type-only checked arithmetic/comparisons, and
       non-`i32` struct fields → `examples/m2d_numeric_types.crust`;
       `tests/m2d_numeric.py` and `tests/m2d_checks.py` pass.
-- [ ] M2E — `as` casts (defined truncation/wrapping), `&& || !`, and `%`. (No I/O.)
-- [ ] M3 — slices (`str`, `[]u8`), `Result`/`Option`, `?`, prelude → compile
-      `file_read.crust` and `crust_inspect.crust`.
+- [x] **M2E — explicit numeric casts.** `expr as Type` between numeric types with
+      defined two's-complement semantics (never panics) →
+      `examples/m2e_casts.crust`; `tests/m2e_casts.py` and `tests/m2e_checks.py`
+      pass. Final numeric-system milestone.
+- [ ] M3A — slices: `str`, `[]u8`, and `.len`. (First step toward binary/file
+      inspection; `%` and boolean logic intentionally deferred.)
+- [ ] M3 — `Result`/`Option`, `?`, prelude I/O → compile `file_read.crust` and
+      `crust_inspect.crust`.
 - [ ] Type checker for the full `v0.1` type set
 - [ ] (No move/borrow checker — all v0.1 types copy; see `spec/memory-model.md` §1)
 - [ ] Conformance test suite under `tests/` — every example compiles and runs

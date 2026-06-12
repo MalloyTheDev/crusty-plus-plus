@@ -98,13 +98,19 @@ built-in core-constructor type forms (§6.4); there is no general generic syntax
 
 Precedence, from tightest to loosest binding:
 
-1. unary `!`, unary `-`, `as`
-2. `*` `/` `%`
-3. `+` `-`
-4. `<` `<=` `>` `>=`
-5. `==` `!=`
-6. `&&`
-7. `||`
+1. unary `!`, unary `-`
+2. `as` (cast)
+3. `*` `/` `%`
+4. `+` `-`
+5. `<` `<=` `>` `>=`
+6. `==` `!=`
+7. `&&`
+8. `||`
+
+So `as` binds **looser than unary** but **tighter than the multiplicative and
+additive operators**: `-x as T` is `(-x) as T`, and `a as T + b` is
+`(a as T) + b`. Parenthesize where a different grouping is intended. Casts are
+left-associative (`a as i32 as u8` is `(a as i32) as u8`).
 
 Assignment (`=`) is a statement, not an expression.
 
@@ -204,10 +210,10 @@ and_expr    = eq_expr    ( "&&" eq_expr )*
 eq_expr     = rel_expr   ( ( "==" | "!=" ) rel_expr )*
 rel_expr    = add_expr   ( ( "<" | "<=" | ">" | ">=" ) add_expr )*
 add_expr    = mul_expr   ( ( "+" | "-" ) mul_expr )*
-mul_expr    = unary_expr ( ( "*" | "/" | "%" ) unary_expr )*
+mul_expr    = cast_expr  ( ( "*" | "/" | "%" ) cast_expr )*
+cast_expr   = unary_expr ( "as" type )*
 unary_expr  = ( "!" | "-" ) unary_expr
-            | cast_expr
-cast_expr   = postfix_expr ( "as" type )?
+            | postfix_expr
 postfix_expr = primary ( "." ident | "?" )*
 primary     = int_lit | float_lit | bool_lit | string_lit
             | ident

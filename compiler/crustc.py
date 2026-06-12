@@ -74,7 +74,7 @@ class Diagnostic(Exception):
 
 KEYWORDS = {
     "fn", "return", "let", "mut", "struct", "if", "else",
-    "while", "loop", "break", "continue",
+    "while", "loop", "break", "continue", "as",
 }
 
 # Single-character punctuation the implemented grammar can encounter.
@@ -254,6 +254,12 @@ class FieldAccess(Node):
 class Unary(Node):
     op: str  # "-"
     operand: Node
+
+
+@dataclass
+class Cast(Node):
+    inner: Node
+    target: str  # target type name as written
 
 
 @dataclass
@@ -591,11 +597,22 @@ class Parser:
         return node
 
     def parse_mul(self) -> Node:
-        node = self.parse_unary()
+        node = self.parse_cast()
         while self.at_punct("*", "/"):
             op = self.advance()
-            right = self.parse_unary()
+            right = self.parse_cast()
             node = Binary(op.line, op.col, op.value, node, right)
+        return node
+
+    def parse_cast(self) -> Node:
+        # `as` binds looser than unary `-` but tighter than `* /` (and the other
+        # binary operators): `-x as T` is `(-x) as T`, and `a as T * b` is
+        # `(a as T) * b`. Left-associative for chains like `a as i32 as u8`.
+        node = self.parse_unary()
+        while self.at("kw", "as"):
+            kw = self.advance()
+            target = self.parse_type(what="a target type after `as`")
+            node = Cast(kw.line, kw.col, node, target.value)
         return node
 
     def parse_unary(self) -> Node:
@@ -1189,6 +1206,8 @@ class Checker:
         if isinstance(expr, Binary) and expr.op in CMP_OPS:
             self.check_comparison_operands(expr)
             return BOOL
+        if isinstance(expr, Cast):
+            return self.synth_cast(expr)
         if isinstance(expr, StructLit):
             return self.synth_struct_lit(expr)
         if isinstance(expr, StrLit):
@@ -1295,6 +1314,33 @@ class Checker:
                     expr.col,
                 )
 
+    def synth_cast(self, cast: Cast) -> str:
+        # `as` converts only between numeric types. The source is synthesized
+        # (no expected type pushed in) because the cast is an explicit
+        # conversion, not a context — so e.g. `300 as u8` is allowed.
+        target = self.resolve_type(cast.target, cast.line, cast.col)
+        if target not in NUMERIC_TYPES:
+            raise Diagnostic(
+                "CRX0039",
+                f"invalid cast target type `{target}`",
+                self.path,
+                cast.line,
+                cast.col,
+                "`as` can only cast to a numeric type",
+            )
+        src = self.synth(cast.inner)
+        if src not in NUMERIC_TYPES:
+            raise Diagnostic(
+                "CRX0038",
+                f"invalid cast source type `{src}`",
+                self.path,
+                cast.inner.line,
+                cast.inner.col,
+                "`as` can only cast from a numeric type",
+            )
+        cast.src = src  # type: ignore[attr-defined]  # consumed by the emitter
+        return target
+
     def synth_struct_lit(self, lit: StructLit) -> str:
         if lit.type_name not in self.structs:
             raise Diagnostic(
@@ -1364,6 +1410,31 @@ _UMAX = {
     "u8": "UINT8_MAX", "u16": "UINT16_MAX", "u32": "UINT32_MAX",
     "u64": "UINT64_MAX", "usize": "SIZE_MAX",
 }
+
+# Bit widths. `usize` is treated as 64-bit (the current build target's size_t).
+WIDTH = {
+    "i8": 8, "i16": 16, "i32": 32, "i64": 64,
+    "u8": 8, "u16": 16, "u32": 32, "u64": 64, "usize": 64,
+}
+UINT_OF_WIDTH = {8: "uint8_t", 16: "uint16_t", 32: "uint32_t", 64: "uint64_t"}
+CAST_TARGETS = ["i8", "i16", "i32", "i64"]  # signed targets that may need a helper
+
+
+def gen_cast_helper(tgt: str) -> str:
+    """Defined two's-complement reinterpretation of target-width bits as `tgt`.
+
+    Used for casts to a signed type whose value may not fit (narrowing, or a
+    same-width unsigned source) — avoiding C's implementation-defined
+    out-of-range signed conversion.
+    """
+    ct = C_TYPE[tgt]
+    ut = UINT_OF_WIDTH[WIDTH[tgt]]
+    return (
+        f"static {ct} crx_cast_to_{tgt}({ut} bits) {{\n"
+        f"    if (bits <= ({ut}){_SMAX[tgt]}) return ({ct})bits;\n"
+        f"    return ({ct})(bits - ({ut}){_SMIN[tgt]}) + {_SMIN[tgt]};\n"
+        f"}}"
+    )
 
 PANIC_DEF = (
     "static void crx_panic(const char *msg) {\n"
@@ -1503,6 +1574,7 @@ class Emitter:
         self.source_path = source_path
         self.includes: set[str] = set()
         self.helpers: set[tuple[str, str]] = set()  # (op, type)
+        self.cast_helpers: set[str] = set()  # signed target types
         self.need_panic = False
 
     def add_type_include(self, t: str) -> None:
@@ -1543,6 +1615,8 @@ class Emitter:
                 self.use_checked(name, t)
                 return f"crx_checked_{name}_{t}({self.expr(node.left)}, {self.expr(node.right)})"
             return f"({self.expr(node.left)} {node.op} {self.expr(node.right)})"
+        if isinstance(node, Cast):
+            return self.lower_cast(self.expr(node.inner), node.src, node.target)  # type: ignore[attr-defined]
         if isinstance(node, StructLit):
             parts = ", ".join(
                 f".{fname} = {self.expr(value)}" for fname, value, _, _ in node.inits
@@ -1551,6 +1625,32 @@ class Emitter:
         if isinstance(node, StrLit):
             return c_string_literal(node.value)
         raise AssertionError(f"cannot emit expression {node!r}")  # pragma: no cover
+
+    def _value_preserving(self, src: str, tgt: str) -> bool:
+        # `tgt` is signed. The source value always fits the target when widening
+        # a signed source, or widening (strictly) an unsigned source.
+        if src in SIGNED_TYPES and WIDTH[tgt] >= WIDTH[src]:
+            return True
+        if src in UNSIGNED_TYPES and WIDTH[tgt] > WIDTH[src]:
+            return True
+        return False
+
+    def lower_cast(self, inner: str, src: str, tgt: str) -> str:
+        self.add_type_include(src)
+        self.add_type_include(tgt)
+        if src == tgt:
+            return inner  # no-op cast
+        ct = c_type(tgt)
+        if tgt in UNSIGNED_TYPES:
+            # Conversion to unsigned is fully defined (modulo 2^width).
+            return f"({ct})({inner})"
+        if self._value_preserving(src, tgt):
+            return f"({ct})({inner})"
+        # Defined two's-complement reinterpretation via a helper.
+        ut = UINT_OF_WIDTH[WIDTH[tgt]]
+        self.cast_helpers.add(tgt)
+        self.includes.add("stdint.h")
+        return f"crx_cast_to_{tgt}(({ut})({inner}))"
 
     def stmt(self, node: Node, indent: int) -> list[str]:
         pad = "    " * indent
@@ -1618,6 +1718,10 @@ class Emitter:
                 if (op, t) in self.helpers:
                     helper_lines.append(gen_helper(op, t))
                     helper_lines.append("")
+        for t in CAST_TARGETS:
+            if t in self.cast_helpers:
+                helper_lines.append(gen_cast_helper(t))
+                helper_lines.append("")
 
         lines: list[str] = []
         lines.append(f"/* Generated by crustc (CRusty++ v0.1) from {self.source_path} */")
