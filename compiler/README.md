@@ -2,8 +2,8 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestones M1 + M2A + M2B + M2C + M2D + M2E + M3A implemented.**
-`crustc.py` compiles the strict M1–M3A subset end-to-end to portable C:
+**Status: milestones M1 + M2A + M2B + M2C + M2D + M2E + M3A + M3B implemented.**
+`crustc.py` compiles the strict M1–M3B subset end-to-end to portable C:
 
 - **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
   return.
@@ -23,6 +23,9 @@ Home of `crustc`, the CRusty++ reference compiler.
   casts never panic).
 - **M3A** — [`../examples/m3a_slices.crust`](../examples/m3a_slices.crust): the
   built-in fat-slice types `str` and `[]u8` with read-only `.len: usize`.
+- **M3B** — [`../examples/m3b_result_option.crust`](../examples/m3b_result_option.crust):
+  the built-in core types `Result<T, E>` and `Option<T>` with constructors
+  `Ok`/`Err`/`Some`/`None` and inspectors `is_ok`/`is_err`/`unwrap`.
 
 Everything beyond this subset is intentionally rejected with a diagnostic, not
 parsed — the compiler never accepts more than the spec defines.
@@ -35,14 +38,14 @@ parsed — the compiler never accepts more than the spec defines.
 
 ```sh
 # Emit C to stdout / file, build, build-and-run:
-python3 compiler/crustc.py examples/m3a_slices.crust
-python3 compiler/crustc.py examples/m3a_slices.crust --emit-c build/m3a.c
-python3 compiler/crustc.py examples/m3a_slices.crust --run
+python3 compiler/crustc.py examples/m3b_result_option.crust
+python3 compiler/crustc.py examples/m3b_result_option.crust --emit-c build/m3b.c
+python3 compiler/crustc.py examples/m3b_result_option.crust --run
 
 # Acceptance + behavior + diagnostic checks:
 for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops \
          m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks \
-         m3a_slices m3a_checks; do
+         m3a_slices m3a_checks m3b_result_option m3b_checks; do
     python3 tests/$t.py || break
 done
 ```
@@ -77,11 +80,14 @@ postfix     = primary ("." ident)*            ; field access
 primary     = int_lit | string_lit | "(" expr ")"
             | ident                            ; variable
             | ident "{" finits? "}"            ; struct literal (not in a condition)
+            | ("Ok" | "Err" | "Some") "(" expr ")"   ; core-type constructors
+            | "None"
 finits      = ident ":" expr ("," ident ":" expr)* ","?
 type        = numeric_type | "bool" | "str" | "[" "]" "u8"
-            | <declared struct name>
+            | core_type | <declared struct name>
 numeric_type = "i8" | "i16" | "i32" | "i64"
              | "u8" | "u16" | "u32" | "u64" | "usize"
+core_type   = "Option" "<" type ">" | "Result" "<" type "," type ">"
 ```
 
 `postfix`'s `.len` on a `str`/`[]u8` value is the built-in slice length; on a
@@ -98,10 +104,10 @@ Casts are left-associative. Parenthesize for any other grouping.
 
 This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
 parameters, `%`, `&& || !`, field assignment, indexing/slicing expressions, array
-literals, `Result`/`Option`, `?`, file I/O, struct-typed fields, and any function
-other than `main` are **rejected** (see Diagnostics). They arrive in later
-milestones (see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and
-the M3B recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+literals, `?`, file I/O, nested/struct-field core types, struct-typed fields, and
+any function other than `main` are **rejected** (see Diagnostics). They arrive in
+later milestones (see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md)
+and the M3C recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
 
 ## Casts (M2E)
 
@@ -175,6 +181,34 @@ it decodes to — not a Unicode scalar count.
 string literal value → `(crx_str){ "literal", <byte-len> }`. `.len` → the C `.len`
 field. The slice typedefs are emitted before any user struct that embeds them.
 
+## Core types: `Result<T, E>` and `Option<T>` (M3B)
+
+- These two are the **only** angle-bracket type forms — built-in core type
+  constructors, **not** user generics. Any other `Name<...>` is rejected
+  (`CRX0041`).
+- Constructors `Ok(v)`, `Err(e)`, `Some(v)`, `None` are **context-typed**: their
+  type comes from the expected `Result<T, E>` / `Option<T>` at the use site (a
+  `let` annotation, assignment target, struct field, …). A constructor with no
+  matching expected type is rejected (`CRX0042`); one whose type cannot be
+  inferred at all (e.g. `is_ok(None)`) is `CRX0040`. Two core types are equal iff
+  their constructor and all parameters are equal. They copy by value.
+- **Inspectors:** `is_ok(r)` / `is_err(r)` are `Result`-only and return `bool`;
+  `unwrap(x)` works on both `Result` and `Option`, returning the `Ok`/`Some`
+  payload and **panicking (exit 101) on `Err`/`None`** via `crx_panic`. A wrong
+  inspector argument type is `CRX0043`.
+- **Restrictions (M3B):** nested core types (`Result<Option<i32>, i32>`) and core
+  types as struct fields are deferred (`CRX0015`). Arithmetic/comparison/cast on a
+  core type fall out of the numeric-only rules.
+
+**Lowering (tag 1 = present/success, 0 = absent/failure):**
+- `Option<T>` → `typedef struct { int32_t tag; T some; } crx_option_<T>;`.
+- `Result<T, E>` → `typedef struct { int32_t tag; union { T ok; E err; } payload; } crx_result_<T>_<E>;`.
+- `Ok(v)`→`{ .tag = 1, .payload.ok = v }`, `Err(e)`→`{ .tag = 0, .payload.err = e }`,
+  `Some(v)`→`{ .tag = 1, .some = v }`, `None`→`{ .tag = 0 }`.
+- `is_ok`/`is_err` → `(x.tag == 1)` / `(x.tag == 0)`; `unwrap` → a
+  `crx_unwrap_<type>` helper. Core typedefs are emitted after slices and user
+  structs (their payloads may be either); unwrap helpers after the typedefs.
+
 ## Checked arithmetic
 
 `+ - * /` and unary `-` lower to per-type runtime helpers
@@ -236,8 +270,12 @@ C source  →  system C compiler  →  executable
 | `CRX0035` | mixed-type arithmetic (operands differ in numeric type) |
 | `CRX0036` | integer literal out of range for its type |
 | `CRX0037` | unary `-` applied to an unsigned type |
-| `CRX0038` | invalid cast source type (`bool` / struct) |
-| `CRX0039` | invalid cast target type (`bool` / struct) |
+| `CRX0038` | invalid cast source type (`bool` / struct / core type) |
+| `CRX0039` | invalid cast target type (`bool` / struct / core type) |
+| `CRX0040` | cannot infer a constructor's type (no expected core type) |
+| `CRX0041` | user-defined generic type (only built-in `Option`/`Result`) |
+| `CRX0042` | constructor used where a non-matching type is expected |
+| `CRX0043` | inspector (`is_ok`/`is_err`/`unwrap`) given a wrong argument type |
 
 ---
 

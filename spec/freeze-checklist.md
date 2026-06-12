@@ -192,8 +192,27 @@ rejected via the existing numeric-only rules (CRX0028/CRX0029/CRX0038/CRX0039) �
 > **`[]u8` is type/lowering only in M3A.** There is no value source for `[]u8`
 > yet (no file I/O, indexing, or array literals), so it is allowed as a type and
 > struct field and lowers to C, but cannot be constructed. A runtime `[]u8` value
-> arrives with **M3D** (`read_all_bytes`). Next: **M3B** (`Result`/`Option` core
-> types). Specs remain **FREEZE-CANDIDATE**, not FROZEN.
+> arrives with **M3D** (`read_all_bytes`).
+
+**M3B — `Result`/`Option` core types.** ✅ Built-in `Result<T, E>` and `Option<T>`
+(the only angle-bracket types; user generics rejected, CRX0041) with constructors
+`Ok`/`Err`/`Some`/`None` and inspectors `is_ok`/`is_err`/`unwrap`. Constructors are
+context-typed (their type comes from the expected core type; no expected → CRX0042,
+un-inferrable → CRX0040; wrong inspector arg → CRX0043). Lowering: tagged structs
+`crx_option_<T>` / `crx_result_<T>_<E>` (tag 1 = Some/Ok, 0 = None/Err); `unwrap`
+helpers panic (exit 101) on None/Err. Target `examples/m3b_result_option.crust`
+(`tests/m3b_result_option.py`, exit 0) + `tests/m3b_checks.py` (7 runtime, 6
+negative).
+
+> **Two deliberate decisions, recorded:** (1) `unwrap` was extended to accept
+> `Option<T>` (the frozen prelude listed it as Result-only) so the M3B
+> Option/None paths are testable — spec updated (`v0.1.md` §2.9,
+> `error-handling.md` §1–2) under the user's M3B directive. (2) **Nested core
+> types and core-typed struct fields are deferred** in M3B (CRX0015); the spec
+> grammar admits nesting, so this is a milestone restriction, not a spec change.
+> Agent-1 recommended clarifications applied: `None` context-typing, core-type
+> equality, constructor payload typing. Next: **M3C** (`?` propagation). Specs
+> remain **FREEZE-CANDIDATE**, not FROZEN.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

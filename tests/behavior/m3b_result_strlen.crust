@@ -1,0 +1,6 @@
+// Result<usize, i32> carrying a str length.
+fn main() -> i32 {
+    let s: str = "abcd";
+    let r: Result<usize, i32> = Ok(s.len);
+    if unwrap(r) == 4 { return 0; } else { return 1; }
+}

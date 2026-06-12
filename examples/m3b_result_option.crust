@@ -1,0 +1,40 @@
+// m3b_result_option.crust
+//
+// M3B target: the built-in core types `Result<T, E>` and `Option<T>` with their
+// constructors (`Ok`, `Err`, `Some`, `None`) and the inspectors `is_ok`,
+// `is_err`, `unwrap`. No `?`, no file I/O — values are constructed locally.
+//
+// `Option<T>`/`Result<T, E>` are the ONLY angle-bracket types and are built-in,
+// not user generics.
+//
+// Returns 0 on success.
+
+fn main() -> i32 {
+    // Result<i32, i32>
+    let ok_r: Result<i32, i32> = Ok(42);
+    let err_r: Result<i32, i32> = Err(7);
+    let a: bool = is_ok(ok_r);          // true
+    let b: bool = is_err(err_r);        // true
+    let v: i32 = unwrap(ok_r);          // 42
+
+    // Option<i32>
+    let some_o: Option<i32> = Some(5);
+    let w: i32 = unwrap(some_o);        // 5
+    let mut maybe: Option<i32> = None;  // construct None (unwrapping it would panic)
+    maybe = Some(9);                    // reassign by value, then unwrap the Some
+    let x: i32 = unwrap(maybe);         // 9
+
+    // Result<usize, i32> carrying a str length
+    let msg: str = "abcd";              // 4 bytes
+    let len_r: Result<usize, i32> = Ok(msg.len);
+    let n: usize = unwrap(len_r);       // 4
+
+    let mut result: i32 = 0;
+    if a { } else { result = 1; }
+    if b { } else { result = 1; }
+    if v == 42 { } else { result = 1; }
+    if w == 5 { } else { result = 1; }
+    if x == 9 { } else { result = 1; }
+    if n == 4 { } else { result = 1; }
+    return result;
+}

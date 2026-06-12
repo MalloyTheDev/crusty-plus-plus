@@ -1,0 +1,6 @@
+// Result<i32, i32> Err path: is_err true, is_ok false.
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(7);
+    if is_err(r) { } else { return 1; }
+    if is_ok(r) { return 1; } else { return 0; }
+}

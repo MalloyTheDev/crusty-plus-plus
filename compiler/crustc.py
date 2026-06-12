@@ -281,6 +281,27 @@ class Call(Node):
     args: list[Node]
 
 
+# Built-in core-type constructors (not user functions).
+@dataclass
+class OkExpr(Node):
+    inner: Node
+
+
+@dataclass
+class ErrExpr(Node):
+    inner: Node
+
+
+@dataclass
+class SomeExpr(Node):
+    inner: Node
+
+
+@dataclass
+class NoneExpr(Node):
+    pass
+
+
 @dataclass
 class ExprStmt(Node):
     expr: Node
@@ -437,7 +458,47 @@ class Parser:
             self.expect("punct", "]", what="`]`")
             elem = self.expect("ident", what="a slice element type")
             return Token("type", f"[]{elem.value}", lb.line, lb.col)
-        return self.expect("ident", what=what)
+        tok = self.expect("ident", what=what)
+        # The two built-in core-type forms are the ONLY angle-bracket types.
+        if self.at_punct("<"):
+            return self.parse_core_type(tok)
+        return tok
+
+    def parse_core_type(self, head: Token) -> Token:
+        if head.value not in ("Option", "Result"):
+            raise Diagnostic(
+                "CRX0041",
+                f"user-defined generic types are not supported (`{head.value}<...>`)",
+                self.path,
+                head.line,
+                head.col,
+                "the only generic-like types are built-in `Option<T>` and `Result<T, E>`",
+            )
+        self.expect("punct", "<", what="`<`")
+        if head.value == "Option":
+            inner = self.parse_type(what="the `Option` payload type")
+            self.reject_nested_core(inner)
+            self.expect("punct", ">", what="`>`")
+            return Token("type", f"Option<{inner.value}>", head.line, head.col)
+        # Result<T, E>
+        ok_t = self.parse_type(what="the `Result` ok type")
+        self.reject_nested_core(ok_t)
+        self.expect("punct", ",", what="`,`")
+        err_t = self.parse_type(what="the `Result` err type")
+        self.reject_nested_core(err_t)
+        self.expect("punct", ">", what="`>`")
+        return Token("type", f"Result<{ok_t.value},{err_t.value}>", head.line, head.col)
+
+    def reject_nested_core(self, t: Token) -> None:
+        if t.value.startswith("Option<") or t.value.startswith("Result<"):
+            raise Diagnostic(
+                "CRX0015",
+                "nested `Option`/`Result` types are not supported yet",
+                self.path,
+                t.line,
+                t.col,
+                "use a single-level `Option<T>` or `Result<T, E>`",
+            )
 
     def parse_struct_decl(self) -> StructDecl:
         kw = self.expect("kw", "struct", what="`struct`")
@@ -659,6 +720,8 @@ class Parser:
                 return self.parse_struct_lit(tok)
             if self.at_punct("("):
                 return self.parse_call(tok)
+            if tok.value == "None":
+                return NoneExpr(tok.line, tok.col)
             return VarRef(tok.line, tok.col, tok.value)
         raise Diagnostic(
             "CRX0003",
@@ -683,7 +746,10 @@ class Parser:
         self.expect("punct", "}", what="`}`")
         return StructLit(name.line, name.col, name.value, inits)
 
-    def parse_call(self, callee: Token) -> Call:
+    def parse_call(self, callee: Token) -> Node:
+        # The single-payload core-type constructors.
+        if callee.value in ("Ok", "Err", "Some"):
+            return self.parse_constructor(callee)
         self.expect("punct", "(", what="`(`")
         args: list[Node] = []
         if not self.at_punct(")"):
@@ -693,6 +759,25 @@ class Parser:
                 args.append(self.parse_expr())
         self.expect("punct", ")", what="`)`")
         return Call(callee.line, callee.col, callee.value, args)
+
+    def parse_constructor(self, callee: Token) -> Node:
+        self.expect("punct", "(", what="`(`")
+        inner = self.parse_expr()
+        if self.at_punct(","):
+            tok = self.peek()
+            raise Diagnostic(
+                "CRX0013",
+                f"`{callee.value}` takes exactly one argument",
+                self.path,
+                tok.line,
+                tok.col,
+            )
+        self.expect("punct", ")", what="`)`")
+        if callee.value == "Ok":
+            return OkExpr(callee.line, callee.col, inner)
+        if callee.value == "Err":
+            return ErrExpr(callee.line, callee.col, inner)
+        return SomeExpr(callee.line, callee.col, inner)
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +808,30 @@ INT_RANGE: dict[str, tuple[int, int]] = {
     "u64": (0, 2**64 - 1),
     "usize": (0, 2**64 - 1),
 }
+
+
+def is_option(t: str) -> bool:
+    return t.startswith("Option<")
+
+
+def is_result(t: str) -> bool:
+    return t.startswith("Result<")
+
+
+def is_core(t: str) -> bool:
+    return is_option(t) or is_result(t)
+
+
+def option_inner(t: str) -> str:
+    """`Option<T>` -> `T`."""
+    return t[len("Option<"):-1]
+
+
+def result_inner(t: str) -> tuple[str, str]:
+    """`Result<T,E>` -> `(T, E)`. Safe because nested core types are rejected,
+    so neither T nor E contains a comma."""
+    ok_t, err_t = t[len("Result<"):-1].split(",", 1)
+    return ok_t, err_t
 
 
 def is_literalish(expr: Node) -> bool:
@@ -811,6 +920,15 @@ class Checker:
                     raise Diagnostic(
                         "CRX0015",
                         "struct-typed fields are not supported yet",
+                        self.path,
+                        fld.line,
+                        fld.col,
+                        "struct fields must be numeric, `bool`, `str`, or `[]u8`",
+                    )
+                if is_core(fld.type_name):
+                    raise Diagnostic(
+                        "CRX0015",
+                        "`Option`/`Result` struct fields are not supported yet",
                         self.path,
                         fld.line,
                         fld.col,
@@ -1003,13 +1121,22 @@ class Checker:
             return name
         if name in self.structs:
             return name
+        if is_option(name):
+            self.resolve_type(option_inner(name), line, col)
+            return name
+        if is_result(name):
+            ok_t, err_t = result_inner(name)
+            self.resolve_type(ok_t, line, col)
+            self.resolve_type(err_t, line, col)
+            return name
         raise Diagnostic(
             "CRX0021",
             f"unknown type `{name}`",
             self.path,
             line,
             col,
-            "known types: integers, `bool`, `str`, `[]u8`, and declared structs",
+            "known types: integers, `bool`, `str`, `[]u8`, `Option<T>`, "
+            "`Result<T, E>`, and declared structs",
         )
 
     def check_let(self, stmt: Let) -> None:
@@ -1147,6 +1274,26 @@ class Checker:
                 )
             self.check_comparison_operands(expr)
             return BOOL
+        # Core-type constructors are context-typed: their type comes from the
+        # expected `Result<T, E>` / `Option<T>` at the use site.
+        if isinstance(expr, (OkExpr, ErrExpr)):
+            if not is_result(expected):
+                raise self._constructor_context_error(expr, expected, "Result<T, E>")
+            ok_t, err_t = result_inner(expected)
+            self.check(expr.inner, ok_t if isinstance(expr, OkExpr) else err_t)
+            expr.rtype = expected  # type: ignore[attr-defined]
+            return expected
+        if isinstance(expr, SomeExpr):
+            if not is_option(expected):
+                raise self._constructor_context_error(expr, expected, "Option<T>")
+            self.check(expr.inner, option_inner(expected))
+            expr.rtype = expected  # type: ignore[attr-defined]
+            return expected
+        if isinstance(expr, NoneExpr):
+            if not is_option(expected):
+                raise self._constructor_context_error(expr, expected, "Option<T>")
+            expr.rtype = expected  # type: ignore[attr-defined]
+            return expected
         actual = self.synth(expr)
         if actual != expected:
             raise Diagnostic(
@@ -1239,12 +1386,91 @@ class Checker:
             return self.synth_struct_lit(expr)
         if isinstance(expr, StrLit):
             return STR
+        if isinstance(expr, (OkExpr, ErrExpr, SomeExpr, NoneExpr)):
+            # Constructors have no type without an expected core type.
+            name = self._constructor_name(expr)
+            need = "Result<T, E>" if isinstance(expr, (OkExpr, ErrExpr)) else "Option<T>"
+            raise Diagnostic(
+                "CRX0040",
+                f"cannot infer the type of `{name}` here",
+                self.path,
+                expr.line,
+                expr.col,
+                f"give it an expected `{need}` type, e.g. via a `let` annotation",
+            )
         if isinstance(expr, Call):
-            self.check_println(expr)
-            return UNIT
+            return self.synth_call(expr)
         raise Diagnostic(  # pragma: no cover
             "CRX0015", "unsupported expression", self.path, expr.line, expr.col
         )
+
+    def _constructor_name(self, expr: Node) -> str:
+        return {
+            OkExpr: "Ok(...)",
+            ErrExpr: "Err(...)",
+            SomeExpr: "Some(...)",
+            NoneExpr: "None",
+        }[type(expr)]
+
+    def _constructor_context_error(
+        self, expr: Node, expected: str, need: str
+    ) -> Diagnostic:
+        name = self._constructor_name(expr)
+        return Diagnostic(
+            "CRX0042",
+            f"`{name}` requires an expected `{need}` type, found `{expected}`",
+            self.path,
+            expr.line,
+            expr.col,
+        )
+
+    def synth_call(self, call: Call) -> str:
+        # Built-in inspectors over the core types. `println` is statement-only.
+        if call.callee in ("is_ok", "is_err"):
+            arg = self._single_arg(call)
+            arg_type = self.synth(arg)
+            if not is_result(arg_type):
+                raise Diagnostic(
+                    "CRX0043",
+                    f"`{call.callee}` expects a `Result<T, E>`, found `{arg_type}`",
+                    self.path,
+                    arg.line,
+                    arg.col,
+                )
+            call.arg_type = arg_type  # type: ignore[attr-defined]
+            return BOOL
+        if call.callee == "unwrap":
+            arg = self._single_arg(call)
+            arg_type = self.synth(arg)
+            if is_result(arg_type):
+                payload = result_inner(arg_type)[0]
+            elif is_option(arg_type):
+                payload = option_inner(arg_type)
+            else:
+                raise Diagnostic(
+                    "CRX0043",
+                    f"`unwrap` expects a `Result<T, E>` or `Option<T>`, "
+                    f"found `{arg_type}`",
+                    self.path,
+                    arg.line,
+                    arg.col,
+                )
+            call.arg_type = arg_type  # type: ignore[attr-defined]
+            return payload
+        # Not an inspector: fall back to println handling (which rejects others).
+        self.check_println(call)
+        return UNIT
+
+    def _single_arg(self, call: Call) -> Node:
+        if len(call.args) != 1:
+            raise Diagnostic(
+                "CRX0013",
+                f"`{call.callee}` takes 1 argument but {len(call.args)} were given",
+                self.path,
+                call.line,
+                call.col,
+            )
+        return call.args[0]
 
     def _require_numeric(self, t: str, node: Node, code: str, what: str) -> None:
         if t not in NUMERIC_TYPES:
@@ -1565,6 +1791,18 @@ CRX_STR_DEF = "typedef struct { const char *ptr; size_t len; } crx_str;"
 CRX_SLICE_U8_DEF = "typedef struct { const uint8_t *ptr; size_t len; } crx_slice_u8;"
 
 
+def mangle(t: str) -> str:
+    """A C-identifier-safe fragment for a type name (used in core-type C names)."""
+    if t == SLICE_U8:
+        return "slice_u8"
+    if is_option(t):
+        return f"option_{mangle(option_inner(t))}"
+    if is_result(t):
+        ok_t, err_t = result_inner(t)
+        return f"result_{mangle(ok_t)}_{mangle(err_t)}"
+    return t  # numeric / bool / str / struct names are already identifier-safe
+
+
 def c_type(t: str) -> str:
     if t in C_TYPE:
         return C_TYPE[t]
@@ -1574,7 +1812,47 @@ def c_type(t: str) -> str:
         return "crx_str"
     if t == SLICE_U8:
         return "crx_slice_u8"
+    if is_core(t):
+        return f"crx_{mangle(t)}"
     return t  # struct name -> its typedef
+
+
+def gen_core_typedef(t: str) -> str:
+    """Tagged-struct typedef for an `Option<T>` / `Result<T, E>` type.
+
+    Convention: tag 1 = present/success (`Some`/`Ok`), tag 0 = absent/failure
+    (`None`/`Err`)."""
+    name = c_type(t)
+    if is_option(t):
+        payload = c_type(option_inner(t))
+        return (
+            f"typedef struct {{ int32_t tag; {payload} some; }} {name};"
+            f"  /* tag 1 = Some, 0 = None */"
+        )
+    ok_t, err_t = result_inner(t)
+    return (
+        f"typedef struct {{ int32_t tag; union {{ {c_type(ok_t)} ok; "
+        f"{c_type(err_t)} err; }} payload; }} {name};"
+        f"  /* tag 1 = Ok, 0 = Err */"
+    )
+
+
+def gen_unwrap_helper(t: str) -> str:
+    """`unwrap` helper for a core type: returns the payload or panics (exit 101)."""
+    name = c_type(t)
+    if is_option(t):
+        payload = c_type(option_inner(t))
+        return (
+            f"static {payload} crx_unwrap_{mangle(t)}({name} o) {{\n"
+            f'    if (o.tag != 1) crx_panic("unwrap on None");\n'
+            f"    return o.some;\n}}"
+        )
+    payload = c_type(result_inner(t)[0])
+    return (
+        f"static {payload} crx_unwrap_{mangle(t)}({name} r) {{\n"
+        f'    if (r.tag != 1) crx_panic("unwrap on Err");\n'
+        f"    return r.payload.ok;\n}}"
+    )
 
 
 def str_byte_len(value: str) -> int:
@@ -1615,6 +1893,8 @@ class Emitter:
         self.need_panic = False
         self.uses_str = False
         self.uses_slice_u8 = False
+        self.core_types: set[str] = set()  # Option/Result types needing a typedef
+        self.unwrap_types: set[str] = set()  # core types needing an unwrap helper
 
     def add_type_include(self, t: str) -> None:
         if t in FIXED_WIDTH:
@@ -1629,6 +1909,16 @@ class Emitter:
         elif t == SLICE_U8:
             self.uses_slice_u8 = True
             self.includes |= {"stdint.h", "stddef.h"}  # uint8_t + size_t
+        elif is_option(t):
+            self.includes.add("stdint.h")  # int32_t tag
+            self.core_types.add(t)
+            self.add_type_include(option_inner(t))
+        elif is_result(t):
+            self.includes.add("stdint.h")  # int32_t tag
+            self.core_types.add(t)
+            ok_t, err_t = result_inner(t)
+            self.add_type_include(ok_t)
+            self.add_type_include(err_t)
 
     def use_checked(self, op: str, t: str) -> None:
         self.helpers.add((op, t))
@@ -1672,7 +1962,37 @@ class Emitter:
             # literal (which carries an implicit NUL the literal length excludes).
             self.add_type_include(STR)
             return f"(crx_str){{ {c_string_literal(node.value)}, {str_byte_len(node.value)} }}"
+        if isinstance(node, (OkExpr, ErrExpr, SomeExpr, NoneExpr)):
+            return self.emit_constructor(node)
+        if isinstance(node, Call):
+            return self.emit_call(node)
         raise AssertionError(f"cannot emit expression {node!r}")  # pragma: no cover
+
+    def emit_constructor(self, node: Node) -> str:
+        t = node.rtype  # type: ignore[attr-defined]  # set by the checker
+        self.add_type_include(t)
+        ct = c_type(t)
+        if isinstance(node, OkExpr):
+            return f"({ct}){{ .tag = 1, .payload.ok = {self.expr(node.inner)} }}"
+        if isinstance(node, ErrExpr):
+            return f"({ct}){{ .tag = 0, .payload.err = {self.expr(node.inner)} }}"
+        if isinstance(node, SomeExpr):
+            return f"({ct}){{ .tag = 1, .some = {self.expr(node.inner)} }}"
+        return f"({ct}){{ .tag = 0 }}"  # NoneExpr (payload zero-initialized)
+
+    def emit_call(self, node: Call) -> str:
+        arg = node.args[0]
+        if node.callee == "is_ok":
+            return f"({self.expr(arg)}.tag == 1)"
+        if node.callee == "is_err":
+            return f"({self.expr(arg)}.tag == 0)"
+        # unwrap
+        t = node.arg_type  # type: ignore[attr-defined]
+        self.add_type_include(t)
+        self.unwrap_types.add(t)
+        self.need_panic = True
+        self.includes |= {"stdio.h", "stdlib.h"}
+        return f"crx_unwrap_{mangle(t)}({self.expr(arg)})"
 
     def _value_preserving(self, src: str, tgt: str) -> bool:
         # `tgt` is signed. The source value always fits the target when widening
@@ -1778,6 +2098,15 @@ class Emitter:
         if self.uses_slice_u8:
             slice_lines += [CRX_SLICE_U8_DEF, ""]
 
+        # Core typedefs come after slices and user structs (their payloads may be
+        # either); unwrap helpers come after the typedefs they use.
+        core_lines: list[str] = []
+        for t in sorted(self.core_types):
+            core_lines += [gen_core_typedef(t), ""]
+        unwrap_lines: list[str] = []
+        for t in sorted(self.unwrap_types):
+            unwrap_lines += [gen_unwrap_helper(t), ""]
+
         lines: list[str] = []
         lines.append(f"/* Generated by crustc (CRusty++ v0.1) from {self.source_path} */")
         lines.append("/* Do not edit by hand. */")
@@ -1787,6 +2116,8 @@ class Emitter:
         lines.extend(helper_lines)
         lines.extend(slice_lines)
         lines.extend(struct_lines)
+        lines.extend(core_lines)
+        lines.extend(unwrap_lines)
         lines.append("int main(void) {")
         lines.extend(body_lines)
         lines.append("}")

@@ -13,6 +13,7 @@ Acceptance tests (compile → build → run → assert golden C + exit code):
 - [`m2d_numeric.py`](./m2d_numeric.py) — `m2d_numeric_types.crust`; exit `0`.
 - [`m2e_casts.py`](./m2e_casts.py) — `m2e_casts.crust`; exit `0`.
 - [`m3a_slices.py`](./m3a_slices.py) — `m3a_slices.crust`; exit `0`.
+- [`m3b_result_option.py`](./m3b_result_option.py) — `m3b_result_option.crust`; exit `0`.
 
 Behavior tests (runtime exit-code assertions):
 
@@ -40,6 +41,11 @@ Diagnostic + control-flow + numeric tests:
   negative compile cases `str` arithmetic (`CRX0028`), `str` comparison
   (`CRX0029`), `str as i32` (`CRX0038`), `5 as str` (`CRX0039`), `.len` on `i32`
   (`CRX0026`), `str` non-`len` field (`CRX0025`).
+- [`m3b_checks.py`](./m3b_checks.py) — seven core-type runtime programs: Result
+  Ok/Err and Option Some/None paths and `Result<usize, i32>` over `str.len` (exit
+  `0`), and `unwrap(Err)` / `unwrap(None)` (exit `101`); and negative compile
+  cases malformed `Result<>`/`Option<>` (`CRX0003`), user generic (`CRX0041`),
+  `None`/`Ok`/`Some` against a non-matching expected type (`CRX0042`).
 
 Goldens live in [`golden/`](./golden/) (one `.c` per acceptance example) for the
 codegen stability checks.
@@ -49,7 +55,7 @@ Run them all:
 ```sh
 for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops \
          m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks \
-         m3a_slices m3a_checks; do
+         m3a_slices m3a_checks m3b_result_option m3b_checks; do
     python3 tests/$t.py || break
 done
 ```

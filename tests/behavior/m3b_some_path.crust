@@ -1,0 +1,5 @@
+// Option<i32> Some path: unwrap yields the value.
+fn main() -> i32 {
+    let o: Option<i32> = Some(5);
+    if unwrap(o) == 5 { return 0; } else { return 1; }
+}

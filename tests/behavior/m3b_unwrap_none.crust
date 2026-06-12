@@ -1,0 +1,6 @@
+// unwrap on None aborts with exit code 101.
+fn main() -> i32 {
+    let o: Option<i32> = None;
+    let v: i32 = unwrap(o);
+    return 0;
+}

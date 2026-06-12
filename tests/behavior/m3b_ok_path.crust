@@ -1,0 +1,6 @@
+// Result<i32, i32> Ok path: is_ok true and unwrap yields the value.
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(42);
+    if is_ok(r) { } else { return 1; }
+    if unwrap(r) == 42 { return 0; } else { return 1; }
+}

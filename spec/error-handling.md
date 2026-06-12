@@ -25,9 +25,15 @@ Option<T> = Some(T) | None
 ```
 
 `Option` is recognized in v0.1 (`syntax.md` §6.4) and constructed with `Some(v)`
-/ `None`. It is used where absence is normal and not an error. No v0.1 example
-needs `Option`, so the prelude ships **no** `Option` helpers yet; they are added
-when an example requires them.
+/ `None`. It is used where absence is normal and not an error.
+
+`Some(v)` has type `Option<typeof v>`. `None` has no payload to infer `T` from;
+its `Option<T>` type is taken from the **expected type at its use site** (a `let`
+annotation, parameter type, or `return` type), exactly as integer literals are
+context-typed (`v0.1.md` §2.2). `None` (or `Some`) in a position with no expected
+`Option<T>` is a compile error. `unwrap` works on `Option` (returns the `Some`
+payload, panics on `None`; see §2); the predicates `is_ok`/`is_err` are
+`Result`-only.
 
 ## 2. `Result<T, E>` — success or failure
 
@@ -64,9 +70,13 @@ if is_err(r) {
 let n: i32 = unwrap(r);     // safe here: the Err case already returned
 ```
 
-- `is_ok(r) -> bool`, `is_err(r) -> bool` — test the variant.
-- `unwrap(r) -> T` — return the `Ok` payload; **panics** (aborts) if `r` is
-  `Err`. Intended for use after an `is_ok`/`is_err` guard.
+- `is_ok(r) -> bool`, `is_err(r) -> bool` — test the variant (`Result` only).
+- `unwrap(r) -> T` — return the `Ok` payload (or, for an `Option<T>`, the `Some`
+  payload); **panics** (aborts, exit 101) if `r` is `Err` / `None`. Intended for
+  use after an `is_ok`/`is_err` guard.
+- `Ok(v)` has type `Result<typeof v, E>` and `Err(e)` type `Result<T, typeof e>`,
+  where the unconstrained parameter is supplied by the expected `Result<T, E>` at
+  the use site. `Ok`/`Err` with no expected `Result<T, E>` is a compile error.
 
 Because all v0.1 types copy (`memory-model.md` §1), passing a `Result` to
 `is_err` and then `unwrap` copies it — there is no move to track.

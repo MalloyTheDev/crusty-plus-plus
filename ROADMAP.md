@@ -49,7 +49,10 @@ conform. **No compiler code is written before this phase closes.**
       `.len: usize` → `examples/m3a_slices.crust`; `tests/m3a_slices.py` and
       `tests/m3a_checks.py` pass. (`[]u8` has no value source yet — type/lowering
       only.)
-- [ ] M3B — `Result`/`Option` core types.
+- [x] **M3B — `Result`/`Option` core types.** Built-in `Result<T, E>` /
+      `Option<T>` with constructors `Ok`/`Err`/`Some`/`None` and inspectors
+      `is_ok`/`is_err`/`unwrap` (no `?`) → `examples/m3b_result_option.crust`;
+      `tests/m3b_result_option.py` and `tests/m3b_checks.py` pass.
 - [ ] M3C — `?` propagation.
 - [ ] M3D — prelude `read_all_bytes` + `file_read.crust`.
 - [ ] M3E — `crust_inspect.crust`.

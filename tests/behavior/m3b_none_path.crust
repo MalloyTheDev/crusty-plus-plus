@@ -1,0 +1,7 @@
+// Option<i32> None path: None is constructible; reassigning a Some then
+// unwrapping yields that value (exercises None without panicking).
+fn main() -> i32 {
+    let mut o: Option<i32> = None;
+    o = Some(8);
+    if unwrap(o) == 8 { return 0; } else { return 1; }
+}

@@ -1,0 +1,6 @@
+// unwrap on Err aborts with exit code 101.
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(7);
+    let v: i32 = unwrap(r);
+    return 0;
+}
