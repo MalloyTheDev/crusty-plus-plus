@@ -1,0 +1,13 @@
+// Behavior: `continue` skips one iteration; returns 0.
+fn main() -> i32 {
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
+    while i < 5 {
+        i = i + 1;
+        if i == 3 {
+            continue;        // skip adding 3
+        }
+        acc = acc + i;
+    }
+    return acc - 12;         // 1+2+4+5 == 12  ->  0
+}

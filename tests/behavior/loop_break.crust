@@ -1,0 +1,11 @@
+// Behavior: a loop that exits via break; returns 0.
+fn main() -> i32 {
+    let mut i: i32 = 0;
+    loop {
+        if i >= 3 {
+            break;
+        }
+        i = i + 1;
+    }
+    return i - 3;   // 3 - 3 == 0
+}

@@ -34,8 +34,11 @@ conform. **No compiler code is written before this phase closes.**
       abort with exit 101) → `examples/m2b_checked_if.crust`;
       `tests/m2b_checked_if.py` and `tests/m2b_behavior.py` pass. Closes the M2A
       checked-arithmetic deferral.
-- [ ] M2C — `while`/`loop`/`break`/`continue`, `let mut` + assignment,
-      remaining integer types and `as` casts, `&& || !` and `%`. (No I/O.)
+- [x] **M2C — mutability + loops.** `let mut`, assignment statements, and
+      `while`/`loop`/`break`/`continue` → `examples/m2c_loops.crust`;
+      `tests/m2c_loops.py` and `tests/m2c_diagnostics.py` pass.
+- [ ] M2D — remaining integer types and `as` casts (with per-width checked
+      arithmetic), `&& || !`, and `%`. (No I/O.)
 - [ ] M3 — slices (`str`, `[]u8`), `Result`/`Option`, `?`, prelude → compile
       `file_read.crust` and `crust_inspect.crust`.
 - [ ] Type checker for the full `v0.1` type set

@@ -135,7 +135,23 @@ exit `0`). New diagnostics CRX0029 (comparison operand type) and CRX0030 (non-bo
 > `i32::MIN` negation/division, per `v0.1.md` §8 and `error-handling.md` §5.
 > Proven by `tests/m2b_behavior.py` (six cases, all exit 101). Remaining scope:
 > apply the same checked lowering to the other integer widths when they are added
-> (M2C) — `i32` is the only integer type implemented so far.
+> (M2D) — `i32` is the only integer type implemented so far.
+
+**M2C — mutability + loops.** ✅ `let mut`, statement-level assignment to local
+variables (no field assignment, no compound assignment, no assignment
+expression), and `while` / `loop` / `break` / `continue`. Immutable locals reject
+assignment; `break`/`continue` outside a loop are rejected; `while` conditions
+must be `bool`; the all-paths-return check now reasons conservatively about loops.
+Target `examples/m2c_loops.crust` (`tests/m2c_loops.py`, exit `0`) plus
+`tests/m2c_diagnostics.py` (5 negative + 2 positive cases). New diagnostics
+CRX0031 (assign to immutable), CRX0032 (invalid assignment target), CRX0033
+(`break` outside loop), CRX0034 (`continue` outside loop); CRX0030 now also covers
+non-`bool` `while` conditions.
+
+> **M2 is not complete.** The M2 acceptance set still needs M2D (remaining integer
+> widths, `as` casts, `&& || !`, `%`) before the language layer for M3 (slices,
+> `Result`/`Option`, `?`, I/O) can land. Specs remain **FREEZE-CANDIDATE**, not
+> FROZEN.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

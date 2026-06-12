@@ -2,8 +2,8 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestones M1 + M2A + M2B implemented.** `crustc.py` compiles the
-strict M1–M2B subset end-to-end to portable C:
+**Status: milestones M1 + M2A + M2B + M2C implemented.** `crustc.py` compiles the
+strict M1–M2C subset end-to-end to portable C:
 
 - **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
   return.
@@ -12,6 +12,8 @@ strict M1–M2B subset end-to-end to portable C:
 - **M2B** — [`../examples/m2b_checked_if.crust`](../examples/m2b_checked_if.crust):
   `bool`, comparisons, `if`/`else`, and **checked** integer arithmetic (overflow,
   divide-by-zero, and negation overflow abort with exit code **101**).
+- **M2C** — [`../examples/m2c_loops.crust`](../examples/m2c_loops.crust): `let mut`,
+  assignment statements, and `while` / `loop` / `break` / `continue`.
 
 Everything beyond this subset is intentionally rejected with a diagnostic, not
 parsed — the compiler never accepts more than the spec defines.
@@ -24,18 +26,20 @@ parsed — the compiler never accepts more than the spec defines.
 
 ```sh
 # Emit C to stdout:
-python3 compiler/crustc.py examples/m2b_checked_if.crust
+python3 compiler/crustc.py examples/m2c_loops.crust
 
 # Emit C to a file / build / build-and-run:
-python3 compiler/crustc.py examples/m2b_checked_if.crust --emit-c build/m2b.c
-python3 compiler/crustc.py examples/m2b_checked_if.crust --build build/m2b
-python3 compiler/crustc.py examples/m2b_checked_if.crust --run
+python3 compiler/crustc.py examples/m2c_loops.crust --emit-c build/m2c.c
+python3 compiler/crustc.py examples/m2c_loops.crust --build build/m2c
+python3 compiler/crustc.py examples/m2c_loops.crust --run
 
-# Acceptance + behavior checks:
+# Acceptance + behavior + diagnostic checks:
 python3 tests/m1_hello.py
 python3 tests/m2a_structs.py
 python3 tests/m2b_checked_if.py
 python3 tests/m2b_behavior.py
+python3 tests/m2c_loops.py
+python3 tests/m2c_diagnostics.py
 ```
 
 ## Grammar (exactly what `crustc` accepts today)
@@ -48,10 +52,14 @@ sfields     = sfield ("," sfield)* ","?
 sfield      = ident ":" type                  ; field types: i32 only
 function    = "fn" "main" "(" ")" "->" "i32" block
 block       = "{" statement* "}"
-statement   = let_stmt | return_stmt | if_stmt | call_stmt
+statement   = let_stmt | assign_stmt | return_stmt | if_stmt
+            | while_stmt | loop_stmt | "break" ";" | "continue" ";" | call_stmt
 let_stmt    = "let" "mut"? ident ":" type "=" expr ";"
+assign_stmt = ident "=" expr ";"              ; target is a local variable only
 return_stmt = "return" expr ";"
 if_stmt     = "if" expr block ("else" (if_stmt | block))?   ; condition is bool
+while_stmt  = "while" expr block              ; condition is bool
+loop_stmt   = "loop" block                    ; infinite unless break/return
 call_stmt   = "println" "(" string_lit ")" ";"   ; M1 carry-over
 expr        = equality
 equality    = relational (("==" | "!=") relational)*
@@ -62,21 +70,22 @@ unary       = "-" unary | postfix
 postfix     = primary ("." ident)*            ; field access
 primary     = int_lit | string_lit | "(" expr ")"
             | ident                            ; variable
-            | ident "{" finits? "}"            ; struct literal (not in `if` cond)
+            | ident "{" finits? "}"            ; struct literal (not in a condition)
 finits      = ident ":" expr ("," ident ":" expr)* ","?
 type        = "i32" | "bool" | <declared struct name>
 ```
 
-Note: an `ident {` immediately inside an `if` condition is the block opener, not
-a struct literal (use parentheses if you need a struct literal there).
+Notes: an `ident {` immediately inside an `if`/`while` condition is the block
+opener, not a struct literal (parenthesize if you need a struct literal there).
+Assignment is statement-only (no assignment expression, no `+=`, no field
+assignment); `break`/`continue` are valid only inside a loop.
 
 This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
-parameters, loops, `%`, `&& || !`, assignment, slices, `Result`/`Option`, `?`,
-struct-typed fields, integer types other than `i32`, and any function other than
-`main` are **rejected** (see Diagnostics). `mut` is parsed but has no effect yet
-(no assignment statement exists). They arrive in later milestones (see
-[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2C
-recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+parameters, `%`, `&& || !`, `as` casts, field assignment, slices, `Result`/
+`Option`, `?`, struct-typed fields, integer types other than `i32`, and any
+function other than `main` are **rejected** (see Diagnostics). They arrive in
+later milestones (see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md)
+and the M2D recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
 
 ## Checked arithmetic
 
@@ -92,6 +101,11 @@ crx_checked_mul_i32, crx_checked_div_i32, crx_checked_neg_i32
 
 Each is emitted only when referenced. `bool` lowers to C `<stdbool.h>`;
 comparisons lower to C comparison operators; `if`/`else` to C `if`/`else`.
+
+Control flow (M2C): `let mut` and assignment lower to ordinary C locals and `=`;
+`while` to C `while`; `loop` to `for (;;)`; `break`/`continue` to C
+`break`/`continue`. A conservative all-paths-return check ensures `main` cannot
+fall off the end (a `while` may fall through; a `loop` with no `break` does not).
 
 ## Pipeline
 
@@ -128,7 +142,11 @@ C source  →  system C compiler  →  executable
 | `CRX0027` | unknown variable |
 | `CRX0028` | invalid arithmetic operand type (non-`i32`) |
 | `CRX0029` | invalid comparison operand type (non-`i32`) |
-| `CRX0030` | non-`bool` `if` condition |
+| `CRX0030` | non-`bool` `if` / `while` condition |
+| `CRX0031` | assignment to an immutable local |
+| `CRX0032` | invalid assignment target (field assignment / non-variable) |
+| `CRX0033` | `break` outside a loop |
+| `CRX0034` | `continue` outside a loop |
 
 ---
 

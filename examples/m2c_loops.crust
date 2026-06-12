@@ -1,0 +1,47 @@
+// m2c_loops.crust
+//
+// M2C target program: mutable locals, assignment statements, and loop control
+// flow (`while`, `loop`, `break`, `continue`) on top of the M2B `i32`/`bool`
+// type system with checked arithmetic. No I/O, no user functions.
+//
+// Expected behavior: computes a sum and an even-number count, verifies both,
+//                    and returns 0 on success.
+
+fn main() -> i32 {
+    // Sum 1..=5 with a while loop and a mutable accumulator.
+    let mut sum: i32 = 0;
+    let mut i: i32 = 1;
+    while i <= 5 {
+        sum = sum + i;          // checked addition
+        i = i + 1;
+    }
+    // sum == 15
+
+    // Count even numbers in 0..=9 using loop / break / continue.
+    let mut count: i32 = 0;
+    let mut n: i32 = 0;
+    loop {
+        if n >= 10 {
+            break;
+        }
+        let cur: i32 = n;
+        n = n + 1;
+        let half: i32 = cur / 2;      // checked division
+        let twice: i32 = half * 2;    // checked multiplication
+        if twice != cur {
+            continue;                 // odd: skip
+        }
+        count = count + 1;            // even: count it
+    }
+    // count == 5  (0, 2, 4, 6, 8)
+
+    let mut result: i32 = 1;
+    if sum == 15 {
+        if count == 5 {
+            result = 0;               // success
+        } else {
+            result = 2;
+        }
+    }
+    return result;
+}

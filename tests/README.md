@@ -2,19 +2,28 @@
 
 The CRusty++ conformance test suite.
 
-**Status: M1 + M2A + M2B harnesses in place.**
+**Status: M1 + M2A + M2B + M2C harnesses in place.**
 
 Acceptance tests (compile → build → run → assert golden C + exit code):
 
 - [`m1_hello.py`](./m1_hello.py) — `hello.crust`; stdout `Hello, CRusty++!\n`, exit `0`.
 - [`m2a_structs.py`](./m2a_structs.py) — `m2_structs.crust`; no stdout, exit `0`.
 - [`m2b_checked_if.py`](./m2b_checked_if.py) — `m2b_checked_if.crust`; exit `0`.
+- [`m2c_loops.py`](./m2c_loops.py) — `m2c_loops.crust`; exit `0`.
 
-Behavior tests (checked arithmetic must abort):
+Behavior tests (runtime exit-code assertions):
 
-- [`m2b_behavior.py`](./m2b_behavior.py) — builds and runs each program in
-  [`behavior/`](./behavior/) and asserts exit code `101`: `add_overflow`,
+- [`m2b_behavior.py`](./m2b_behavior.py) — each program in [`behavior/`](./behavior/)
+  triggers a checked-arithmetic fault and must exit `101`: `add_overflow`,
   `sub_overflow`, `mul_overflow`, `div_zero`, `div_overflow`, `neg_overflow`.
+
+Diagnostic + control-flow tests:
+
+- [`m2c_diagnostics.py`](./m2c_diagnostics.py) — negative cases assert a specific
+  error code + exit `1` (assign-to-immutable `CRX0031`, wrong-type assign
+  `CRX0014`, `break`/`continue` outside loop `CRX0033`/`CRX0034`, non-`bool`
+  `while` `CRX0030`); positive cases build and run `loop_break.crust` and
+  `continue_skip.crust` asserting exit `0`.
 
 Goldens live in [`golden/`](./golden/) (one `.c` per acceptance example) for the
 codegen stability checks.
@@ -22,10 +31,9 @@ codegen stability checks.
 Run them all:
 
 ```sh
-python3 tests/m1_hello.py
-python3 tests/m2a_structs.py
-python3 tests/m2b_checked_if.py
-python3 tests/m2b_behavior.py
+for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops m2c_diagnostics; do
+    python3 tests/$t.py || break
+done
 ```
 
 The broader category layout below is the plan for M2+; only the `examples`

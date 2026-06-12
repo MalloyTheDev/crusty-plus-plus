@@ -72,7 +72,10 @@ class Diagnostic(Exception):
 # Lexer
 # ---------------------------------------------------------------------------
 
-KEYWORDS = {"fn", "return", "let", "mut", "struct", "if", "else"}
+KEYWORDS = {
+    "fn", "return", "let", "mut", "struct", "if", "else",
+    "while", "loop", "break", "continue",
+}
 
 # Single-character punctuation the implemented grammar can encounter.
 PUNCT = set("(){};:,.=+-*/<>")
@@ -286,6 +289,12 @@ class Let(Node):
 
 
 @dataclass
+class Assign(Node):
+    target: Node  # validated to be a VarRef in the checker
+    value: Node
+
+
+@dataclass
 class Return(Node):
     value: Node
 
@@ -295,6 +304,27 @@ class If(Node):
     cond: Node
     then_branch: list[Node]
     else_branch: Optional[list[Node]]
+
+
+@dataclass
+class While(Node):
+    cond: Node
+    body: list[Node]
+
+
+@dataclass
+class Loop(Node):
+    body: list[Node]
+
+
+@dataclass
+class Break(Node):
+    pass
+
+
+@dataclass
+class Continue(Node):
+    pass
 
 
 @dataclass
@@ -456,7 +486,19 @@ class Parser:
             return self.parse_return()
         if self.at("kw", "if"):
             return self.parse_if()
-        return self.parse_expr_stmt()
+        if self.at("kw", "while"):
+            return self.parse_while()
+        if self.at("kw", "loop"):
+            return self.parse_loop()
+        if self.at("kw", "break"):
+            kw = self.advance()
+            self.expect("punct", ";", what="`;`")
+            return Break(kw.line, kw.col)
+        if self.at("kw", "continue"):
+            kw = self.advance()
+            self.expect("punct", ";", what="`;`")
+            return Continue(kw.line, kw.col)
+        return self.parse_expr_or_assign_stmt()
 
     def parse_let(self) -> Let:
         kw = self.advance()
@@ -494,8 +536,29 @@ class Parser:
                 else_branch = self.parse_block()
         return If(kw.line, kw.col, cond, then_branch, else_branch)
 
-    def parse_expr_stmt(self) -> ExprStmt:
+    def parse_while(self) -> While:
+        kw = self.expect("kw", "while", what="`while`")
+        saved = self.no_struct_lit
+        self.no_struct_lit = True
+        cond = self.parse_expr()
+        self.no_struct_lit = saved
+        body = self.parse_block()
+        return While(kw.line, kw.col, cond, body)
+
+    def parse_loop(self) -> Loop:
+        kw = self.expect("kw", "loop", what="`loop`")
+        body = self.parse_block()
+        return Loop(kw.line, kw.col, body)
+
+    def parse_expr_or_assign_stmt(self) -> Node:
+        # A statement that starts with an expression is either an assignment
+        # (`place = expr;`) or a bare expression statement (a `println` call).
         expr = self.parse_expr()
+        if self.at_punct("="):
+            eq = self.advance()
+            value = self.parse_expr()
+            self.expect("punct", ";", what="`;`")
+            return Assign(eq.line, eq.col, expr, value)
         self.expect("punct", ";", what="`;`")
         return ExprStmt(expr.line, expr.col, expr)
 
@@ -617,10 +680,35 @@ BOOL = "bool"
 UNIT = "()"
 
 
+def loop_has_break(stmts: list[Node]) -> bool:
+    """True if `stmts` contains a `break` that targets the enclosing loop.
+
+    Breaks inside a *nested* `while`/`loop` bind to that inner loop, so we do
+    not descend into them; we do descend into `if`/`else`.
+    """
+    for stmt in stmts:
+        if isinstance(stmt, Break):
+            return True
+        if isinstance(stmt, If):
+            if loop_has_break(stmt.then_branch):
+                return True
+            if stmt.else_branch is not None and loop_has_break(stmt.else_branch):
+                return True
+    return False
+
+
 def block_returns(stmts: list[Node]) -> bool:
-    """True if executing `stmts` always reaches a `return`."""
+    """Conservatively true if executing `stmts` never falls through the end.
+
+    Counts as "does not fall through": a `return`; an `if`/`else` where both
+    branches do not fall through; a `loop` with no `break` targeting it (it
+    either returns or runs forever). A `while` may always fall through, so it
+    never counts. `break`/`continue` do not return from the function.
+    """
     for stmt in stmts:
         if isinstance(stmt, Return):
+            return True
+        if isinstance(stmt, Loop) and not loop_has_break(stmt.body):
             return True
         if isinstance(stmt, If) and stmt.else_branch is not None:
             if block_returns(stmt.then_branch) and block_returns(stmt.else_branch):
@@ -633,7 +721,9 @@ class Checker:
         self.program = program
         self.path = path
         self.structs: dict[str, StructDecl] = {}
-        self.scope: dict[str, str] = {}
+        # name -> (type, is_mut)
+        self.scope: dict[str, tuple[str, bool]] = {}
+        self.loop_depth = 0
 
     def run(self) -> Func:
         self.collect_structs()
@@ -736,16 +826,112 @@ class Checker:
     def check_stmt(self, stmt: Node) -> None:
         if isinstance(stmt, Let):
             self.check_let(stmt)
+        elif isinstance(stmt, Assign):
+            self.check_assign(stmt)
         elif isinstance(stmt, Return):
             self.check_return(stmt)
         elif isinstance(stmt, If):
             self.check_if(stmt)
+        elif isinstance(stmt, While):
+            self.check_while(stmt)
+        elif isinstance(stmt, Loop):
+            self.check_loop(stmt)
+        elif isinstance(stmt, Break):
+            if self.loop_depth == 0:
+                raise Diagnostic(
+                    "CRX0033",
+                    "`break` outside of a loop",
+                    self.path,
+                    stmt.line,
+                    stmt.col,
+                    "`break` is only valid inside `while` or `loop`",
+                )
+        elif isinstance(stmt, Continue):
+            if self.loop_depth == 0:
+                raise Diagnostic(
+                    "CRX0034",
+                    "`continue` outside of a loop",
+                    self.path,
+                    stmt.line,
+                    stmt.col,
+                    "`continue` is only valid inside `while` or `loop`",
+                )
         elif isinstance(stmt, ExprStmt):
             self.check_expr_stmt(stmt)
         else:  # pragma: no cover
             raise Diagnostic(
                 "CRX0015", "unsupported statement", self.path, stmt.line, stmt.col
             )
+
+    def check_assign(self, stmt: Assign) -> None:
+        target = stmt.target
+        if not isinstance(target, VarRef):
+            if isinstance(target, FieldAccess):
+                raise Diagnostic(
+                    "CRX0032",
+                    "assignment to a struct field is not supported yet",
+                    self.path,
+                    target.line,
+                    target.col,
+                    "only `name = expr;` to a local variable is supported",
+                )
+            raise Diagnostic(
+                "CRX0032",
+                "invalid assignment target",
+                self.path,
+                target.line,
+                target.col,
+                "the left-hand side must be a local variable name",
+            )
+        if target.name not in self.scope:
+            raise Diagnostic(
+                "CRX0027",
+                f"unknown variable `{target.name}`",
+                self.path,
+                target.line,
+                target.col,
+                "declare it with `let` before assigning to it",
+            )
+        declared, is_mut = self.scope[target.name]
+        if not is_mut:
+            raise Diagnostic(
+                "CRX0031",
+                f"cannot assign to immutable variable `{target.name}`",
+                self.path,
+                target.line,
+                target.col,
+                f"declare it as `let mut {target.name}: ...`",
+            )
+        actual = self.infer(stmt.value)
+        if actual != declared:
+            raise Diagnostic(
+                "CRX0014",
+                f"type mismatch: `{target.name}` is `{declared}` "
+                f"but the assigned value has type `{actual}`",
+                self.path,
+                stmt.value.line,
+                stmt.value.col,
+            )
+
+    def check_while(self, stmt: While) -> None:
+        cond_type = self.infer(stmt.cond)
+        if cond_type != BOOL:
+            raise Diagnostic(
+                "CRX0030",
+                f"`while` condition must be `bool`, found `{cond_type}`",
+                self.path,
+                stmt.cond.line,
+                stmt.cond.col,
+                "use a comparison, e.g. `while i < n { ... }`",
+            )
+        self.loop_depth += 1
+        self.check_block(stmt.body)
+        self.loop_depth -= 1
+
+    def check_loop(self, stmt: Loop) -> None:
+        self.loop_depth += 1
+        self.check_block(stmt.body)
+        self.loop_depth -= 1
 
     def check_if(self, stmt: If) -> None:
         cond_type = self.infer(stmt.cond)
@@ -790,7 +976,7 @@ class Checker:
                 stmt.value.line,
                 stmt.value.col,
             )
-        self.scope[stmt.name] = declared
+        self.scope[stmt.name] = (declared, stmt.is_mut)
 
     def check_return(self, stmt: Return) -> None:
         actual = self.infer(stmt.value)
@@ -868,7 +1054,7 @@ class Checker:
                     expr.col,
                     "declare it with `let` before use",
                 )
-            return self.scope[expr.name]
+            return self.scope[expr.name][0]
         if isinstance(expr, FieldAccess):
             obj_type = self.infer(expr.obj)
             if obj_type not in self.structs:
@@ -1122,8 +1308,27 @@ class Emitter:
         if isinstance(node, Let):
             self.includes.add("stdbool.h" if node.declared_type == BOOL else "stdint.h")
             return [f"{pad}{c_type(node.declared_type)} {node.name} = {self.expr(node.value)};"]
+        if isinstance(node, Assign):
+            assert isinstance(node.target, VarRef)
+            return [f"{pad}{node.target.name} = {self.expr(node.value)};"]
         if isinstance(node, Return):
             return [f"{pad}return {self.expr(node.value)};"]
+        if isinstance(node, While):
+            lines = [f"{pad}while ({self.expr(node.cond)}) {{"]
+            for s in node.body:
+                lines += self.stmt(s, indent + 1)
+            lines.append(f"{pad}}}")
+            return lines
+        if isinstance(node, Loop):
+            lines = [f"{pad}for (;;) {{"]
+            for s in node.body:
+                lines += self.stmt(s, indent + 1)
+            lines.append(f"{pad}}}")
+            return lines
+        if isinstance(node, Break):
+            return [f"{pad}break;"]
+        if isinstance(node, Continue):
+            return [f"{pad}continue;"]
         if isinstance(node, ExprStmt) and isinstance(node.expr, Call):
             self.includes.add("stdio.h")
             arg = node.expr.args[0]
