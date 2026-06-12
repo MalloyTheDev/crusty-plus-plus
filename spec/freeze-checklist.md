@@ -110,12 +110,13 @@ undefined construct.
   FREEZE-CANDIDATE until the first milestone validates the C lowering).
 - **Compiler prototype: MAY START — milestone 1 only.**
 
-### First compiler milestone (authorized)
+### First compiler milestone (authorized) — ✅ DONE
 
-**M1 — `hello.crust` end-to-end to C.** Lexer + parser for the M1 subset →
-type check (`main` signature, `str` literal, `i32` return) → emit portable C →
-system C compiler → run; assert stdout `Hello, CRusty++!` and exit `0`. This
-subset has zero open questions.
+**M1 — `hello.crust` end-to-end to C.** Implemented in `compiler/crustc.py`
+(Python 3, stdlib only): lexer → parser → type checker → portable-C emitter.
+`tests/m1_hello.py` compiles, builds via the system C compiler, runs, and asserts
+stdout `Hello, CRusty++!` and exit `0`. Resolved open question F1 (implementation
+language = Python 3).
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

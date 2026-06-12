@@ -1,13 +1,81 @@
 # compiler/
 
-This directory is the future home of the CRusty++ compiler. **It is intentionally
-empty of code.**
+Home of `crustc`, the CRusty++ reference compiler.
 
-Per the project's first principle — *specify before implementing* — no compiler
-work begins until the design phase closes. See
-[`../ROADMAP.md`](../ROADMAP.md) (Phase 0 → Phase 1).
+**Status: milestone M1 implemented.** `crustc.py` compiles the strict M1 subset
+(just enough for [`../examples/hello.crust`](../examples/hello.crust)) end-to-end
+to portable C. Everything beyond M1 is intentionally rejected with a diagnostic,
+not parsed — the compiler never accepts more than the spec defines.
 
-## Entry criteria (when code may start here)
+- **Implementation language:** Python 3 (standard library only; no dependencies).
+- **Backend:** emits portable C, then invokes the system C compiler (`$CC`, or
+  `cc`).
+
+## Usage
+
+```sh
+# Emit C to stdout:
+python3 compiler/crustc.py examples/hello.crust
+
+# Emit C to a file:
+python3 compiler/crustc.py examples/hello.crust --emit-c build/hello.c
+
+# Build an executable via the system C compiler:
+python3 compiler/crustc.py examples/hello.crust --build build/hello
+
+# Build and run:
+python3 compiler/crustc.py examples/hello.crust --run
+
+# Full M1 acceptance check (golden C + build + run + stdout/exit assertions):
+python3 tests/m1_hello.py
+```
+
+## M1 grammar (exactly what `crustc` accepts today)
+
+```
+program   = function+                         ; must contain exactly `main`
+function  = "fn" "main" "(" ")" "->" "i32" block
+block     = "{" statement* "}"
+statement = call_stmt | return_stmt
+call_stmt = "println" "(" string_lit ")" ";"
+return_stmt = "return" int_lit ";"
+```
+
+This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Parameters,
+operators, variables, structs, slices, `Result`/`Option`, and any function other
+than `main` are rejected (see Diagnostics below). They arrive in later milestones
+(see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2
+recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+
+## Pipeline
+
+```
+source (.crust)
+   │  lexer        → tokens          (crustc.py: tokenize)
+   │  parser       → AST             (crustc.py: Parser)
+   │  type checker → validated AST   (crustc.py: check)
+   │  C emitter    → portable C      (crustc.py: emit_c)
+   ▼
+C source  →  system C compiler  →  executable
+```
+
+## Diagnostic codes (M1)
+
+| Code | Meaning |
+|------|---------|
+| `CRX0001` | unexpected character / unknown escape (lexer) |
+| `CRX0002` | unterminated string literal |
+| `CRX0003` | parse error (expected token X) |
+| `CRX0010` | program has no `main` |
+| `CRX0011` | invalid `main` signature / missing `i32` return |
+| `CRX0012` | unknown function (only `println` exists in M1) |
+| `CRX0013` | wrong argument count |
+| `CRX0014` | type mismatch (argument or return) |
+| `CRX0015` | construct not supported in M1 (params, variables, extra fns, …) |
+
+---
+
+## Entry criteria for later milestones (M2+)
 
 Work in this directory begins only when **all** of the following hold. This list
 is the gate; the live status of each item is tracked in

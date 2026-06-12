@@ -1,11 +1,24 @@
 # tests/
 
-This directory is the future home of the CRusty++ conformance test suite. **It is
-intentionally empty of tests for now.**
+The CRusty++ conformance test suite.
 
-A conformance suite only makes sense once there is a compiler to run it against,
-and a frozen spec to test conformance *to*. Both are downstream of the design
-phase. See [`../ROADMAP.md`](../ROADMAP.md).
+**Status: M1 harness in place.**
+
+- [`m1_hello.py`](./m1_hello.py) — the M1 acceptance test. Compiles
+  [`../examples/hello.crust`](../examples/hello.crust) end-to-end and asserts:
+  (1) emitted C matches the golden file, (2) it builds with the system C
+  compiler, (3) stdout is exactly `Hello, CRusty++!\n`, (4) exit code is `0`.
+- [`golden/hello.c`](./golden/hello.c) — golden generated C for the codegen
+  stability check.
+
+Run it:
+
+```sh
+python3 tests/m1_hello.py
+```
+
+The broader category layout below is the plan for M2+; only the `examples`
+(acceptance) and `codegen_c` (golden) categories are populated so far.
 
 ## What this suite will check
 

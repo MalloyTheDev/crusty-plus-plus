@@ -1,0 +1,6 @@
+# Build output (generated C and executables) — never committed.
+/build/
+
+# Python bytecode caches.
+__pycache__/
+*.pyc

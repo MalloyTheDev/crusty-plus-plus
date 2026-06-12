@@ -23,10 +23,14 @@ conform. **No compiler code is written before this phase closes.**
 
 **Goal:** a compiler that accepts exactly the frozen `v0.1` language.
 
-- [ ] Lexer + parser producing an AST that matches `spec/syntax.md`
-- [ ] Type checker for the `v0.1` type set (incl. context-typed integer literals)
+- [x] **M1 — `hello.crust` end-to-end to C.** Lexer, parser, type checker, and C
+      emitter for the M1 subset; builds and runs; `tests/m1_hello.py` passes.
+      Compiler implemented in Python 3 (stdlib only).
+- [ ] M2 — structs, integer arithmetic, context-typed literals (no I/O).
+- [ ] M3 — slices (`str`, `[]u8`), `Result`/`Option`, `?`, prelude → compile
+      `file_read.crust` and `crust_inspect.crust`.
+- [ ] Type checker for the full `v0.1` type set
 - [ ] (No move/borrow checker — all v0.1 types copy; see `spec/memory-model.md` §1)
-- [ ] Code generation to **portable C** (frozen backend; see `compiler/README.md`)
 - [ ] Conformance test suite under `tests/` — every example compiles and runs
 - [ ] Pick and add a `LICENSE`
 
@@ -63,11 +67,12 @@ These are explicitly *aspirations*, not commitments:
 
 Tracked here until resolved, then moved into the relevant spec:
 
-- Implementation language for the first compiler (Phase 1).
-- License choice (before any code lands).
+- License choice (before broader code lands).
 
 Resolved:
 
 - **Backend = portable C** (no LLVM/WASM/native). See `compiler/README.md` and
   `spec/v0.1.md` §9.
+- **Compiler implementation language = Python 3** (standard library only), chosen
+  at M1 start for minimal footprint and direct `cc` invocation.
 - Target triple for the first backend.
