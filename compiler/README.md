@@ -2,13 +2,16 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestones M1 + M2A implemented.** `crustc.py` compiles the strict
-M1+M2A subset end-to-end to portable C:
+**Status: milestones M1 + M2A + M2B implemented.** `crustc.py` compiles the
+strict M1–M2B subset end-to-end to portable C:
 
 - **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
   return.
 - **M2A** — [`../examples/m2_structs.crust`](../examples/m2_structs.crust): plain
   structs, struct literals, field access, `let` bindings, integer arithmetic.
+- **M2B** — [`../examples/m2b_checked_if.crust`](../examples/m2b_checked_if.crust):
+  `bool`, comparisons, `if`/`else`, and **checked** integer arithmetic (overflow,
+  divide-by-zero, and negation overflow abort with exit code **101**).
 
 Everything beyond this subset is intentionally rejected with a diagnostic, not
 parsed — the compiler never accepts more than the spec defines.
@@ -21,16 +24,18 @@ parsed — the compiler never accepts more than the spec defines.
 
 ```sh
 # Emit C to stdout:
-python3 compiler/crustc.py examples/m2_structs.crust
+python3 compiler/crustc.py examples/m2b_checked_if.crust
 
 # Emit C to a file / build / build-and-run:
-python3 compiler/crustc.py examples/m2_structs.crust --emit-c build/m2.c
-python3 compiler/crustc.py examples/m2_structs.crust --build build/m2
-python3 compiler/crustc.py examples/m2_structs.crust --run
+python3 compiler/crustc.py examples/m2b_checked_if.crust --emit-c build/m2b.c
+python3 compiler/crustc.py examples/m2b_checked_if.crust --build build/m2b
+python3 compiler/crustc.py examples/m2b_checked_if.crust --run
 
-# Acceptance checks (golden C + build + run + stdout/exit assertions):
+# Acceptance + behavior checks:
 python3 tests/m1_hello.py
 python3 tests/m2a_structs.py
+python3 tests/m2b_checked_if.py
+python3 tests/m2b_behavior.py
 ```
 
 ## Grammar (exactly what `crustc` accepts today)
@@ -40,36 +45,53 @@ program     = item+                           ; must contain exactly `main`
 item        = struct_decl | function
 struct_decl = "struct" ident "{" sfields? "}"
 sfields     = sfield ("," sfield)* ","?
-sfield      = ident ":" type                  ; M2A field types: i32 only
+sfield      = ident ":" type                  ; field types: i32 only
 function    = "fn" "main" "(" ")" "->" "i32" block
 block       = "{" statement* "}"
-statement   = let_stmt | return_stmt | call_stmt
+statement   = let_stmt | return_stmt | if_stmt | call_stmt
 let_stmt    = "let" "mut"? ident ":" type "=" expr ";"
 return_stmt = "return" expr ";"
+if_stmt     = "if" expr block ("else" (if_stmt | block))?   ; condition is bool
 call_stmt   = "println" "(" string_lit ")" ";"   ; M1 carry-over
-expr        = add
+expr        = equality
+equality    = relational (("==" | "!=") relational)*
+relational  = add (("<" | "<=" | ">" | ">=") add)*
 add         = mul (("+" | "-") mul)*
-mul         = postfix (("*" | "/") postfix)*
+mul         = unary (("*" | "/") unary)*
+unary       = "-" unary | postfix
 postfix     = primary ("." ident)*            ; field access
 primary     = int_lit | string_lit | "(" expr ")"
             | ident                            ; variable
-            | ident "{" finits? "}"            ; struct literal
+            | ident "{" finits? "}"            ; struct literal (not in `if` cond)
 finits      = ident ":" expr ("," ident ":" expr)* ","?
-type        = "i32" | <declared struct name>
+type        = "i32" | "bool" | <declared struct name>
 ```
 
+Note: an `ident {` immediately inside an `if` condition is the block opener, not
+a struct literal (use parentheses if you need a struct literal there).
+
 This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
-parameters, `if`/loops, `%` and unary operators, slices, `Result`/`Option`, `?`,
+parameters, loops, `%`, `&& || !`, assignment, slices, `Result`/`Option`, `?`,
 struct-typed fields, integer types other than `i32`, and any function other than
 `main` are **rejected** (see Diagnostics). `mut` is parsed but has no effect yet
 (no assignment statement exists). They arrive in later milestones (see
-[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2B
+[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M2C
 recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
 
-> **Known deferral:** M2A lowers arithmetic to **plain** C operators. The
-> spec-defined *checked* arithmetic (overflow / div-by-zero → `panic`) is not yet
-> implemented; it is a tracked gap for a later milestone. The M2A example does
-> not overflow, so its behavior is correct.
+## Checked arithmetic
+
+`+ - * /` and unary `-` on `i32` lower to runtime helpers, **not** raw C
+operators, closing the M2A deferral. On overflow, divide-by-zero, or negation of
+`i32::MIN`, the helper calls `crx_panic`, which prints to stderr and `exit(101)`
+(abort-only; no unwinding, no catch). The helpers are:
+
+```
+crx_panic, crx_checked_add_i32, crx_checked_sub_i32,
+crx_checked_mul_i32, crx_checked_div_i32, crx_checked_neg_i32
+```
+
+Each is emitted only when referenced. `bool` lowers to C `<stdbool.h>`;
+comparisons lower to C comparison operators; `if`/`else` to C `if`/`else`.
 
 ## Pipeline
 
@@ -78,7 +100,7 @@ source (.crust)
    │  lexer        → tokens          (crustc.py: tokenize)
    │  parser       → AST             (crustc.py: Parser)
    │  type checker → validated AST   (crustc.py: Checker)
-   │  C emitter    → portable C      (crustc.py: emit_c)
+   │  C emitter    → portable C      (crustc.py: Emitter)
    ▼
 C source  →  system C compiler  →  executable
 ```
@@ -91,7 +113,7 @@ C source  →  system C compiler  →  executable
 | `CRX0002` | unterminated string literal |
 | `CRX0003` | parse error (expected token X) |
 | `CRX0010` | program has no `main` |
-| `CRX0011` | invalid `main` signature / missing `i32` return |
+| `CRX0011` | invalid `main` signature / `main` does not return on every path |
 | `CRX0012` | unknown function (only `println` exists) |
 | `CRX0013` | wrong argument count |
 | `CRX0014` | type mismatch (argument, return, `let`, or struct field init) |
@@ -105,6 +127,8 @@ C source  →  system C compiler  →  executable
 | `CRX0026` | field access on a non-struct value |
 | `CRX0027` | unknown variable |
 | `CRX0028` | invalid arithmetic operand type (non-`i32`) |
+| `CRX0029` | invalid comparison operand type (non-`i32`) |
+| `CRX0030` | non-`bool` `if` condition |
 
 ---
 

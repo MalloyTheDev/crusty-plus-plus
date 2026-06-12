@@ -1,0 +1,6 @@
+// Behavior test: i32 addition overflow must abort with exit code 101.
+fn main() -> i32 {
+    let m: i32 = 2147483647;   // i32::MAX
+    let r: i32 = m + 1;        // checked addition overflows -> panic
+    return r;
+}

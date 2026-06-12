@@ -1,0 +1,6 @@
+// Behavior test: i32::MIN / -1 must abort with exit code 101.
+fn main() -> i32 {
+    let m: i32 = -2147483647 - 1;   // i32::MIN
+    let r: i32 = m / -1;            // checked division overflow -> panic
+    return r;
+}

@@ -124,13 +124,18 @@ checker infers the initializer type and validates it against the annotation), an
 `+ - * /` integer arithmetic. Target `examples/m2_structs.crust`;
 `tests/m2a_structs.py` passes (exit `0`). New diagnostics CRX0020–CRX0028.
 
-> **Tracked impl gap (not a spec defect): checked arithmetic.** M2A lowers
-> arithmetic to plain C operators. `v0.1.md` §8 / `error-handling.md` §5 require
-> overflow, div-by-zero, and negation/division overflow to `panic`. That lowering
-> (an abort shim + overflow checks) is **deferred** to the milestone that adds the
-> remaining integer types and casts (M2B). The M2A example does not overflow, so
-> its observable behavior is conformant. This gap must close before v0.1 is
-> declared fully implemented.
+**M2B — checked arithmetic + branching.** ✅ `bool`, comparisons (→ `bool`),
+`if`/`else` (condition must be `bool`), unary `-`, and **checked `i32`
+arithmetic**. Target `examples/m2b_checked_if.crust` (`tests/m2b_checked_if.py`,
+exit `0`). New diagnostics CRX0029 (comparison operand type) and CRX0030 (non-bool
+`if` condition).
+
+> **Checked-arithmetic gap — CLOSED for `i32`.** `+ - * /` and unary `-` lower to
+> runtime helpers that `panic` (abort, exit 101) on overflow, divide-by-zero, and
+> `i32::MIN` negation/division, per `v0.1.md` §8 and `error-handling.md` §5.
+> Proven by `tests/m2b_behavior.py` (six cases, all exit 101). Remaining scope:
+> apply the same checked lowering to the other integer widths when they are added
+> (M2C) — `i32` is the only integer type implemented so far.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

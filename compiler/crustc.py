@@ -3,10 +3,10 @@
 
 Implemented milestones:
 
-  M1  — the smallest valid program: `fn main() -> i32 { println("..."); return 0; }`
-  M2A — plain data structs, struct literals, field access, `let` bindings, and
-        integer arithmetic (no I/O dependency, no control flow). Target example:
-        `examples/m2_structs.crust`.
+  M1  — smallest program: `fn main() -> i32 { println("..."); return 0; }`
+  M2A — plain structs, struct literals, field access, `let`, integer arithmetic.
+  M2B — `bool`, comparisons, `if`/`else`, and *checked* integer arithmetic
+        (overflow / divide-by-zero / negation overflow abort with exit code 101).
 
 Anything beyond the implemented subset is rejected with a diagnostic rather than
 parsed, so the compiler never silently accepts more than the spec defines.
@@ -72,16 +72,19 @@ class Diagnostic(Exception):
 # Lexer
 # ---------------------------------------------------------------------------
 
-KEYWORDS = {"fn", "return", "let", "mut", "struct"}
+KEYWORDS = {"fn", "return", "let", "mut", "struct", "if", "else"}
 
 # Single-character punctuation the implemented grammar can encounter.
-PUNCT = set("(){};:,.=+-*/")
+PUNCT = set("(){};:,.=+-*/<>")
+
+# Two-character tokens, checked before single-character punctuation.
+TWO_CHAR = {"->", "==", "!=", "<=", ">="}
 
 
 @dataclass
 class Token:
     kind: str  # "ident" | "kw" | "int" | "str" | "punct" | "arrow" | "eof"
-    value: str  # lexeme, or decoded text for "str", or digits for "int"
+    value: str
     line: int
     col: int
 
@@ -106,12 +109,11 @@ def tokenize(src: str, path: str) -> list[Token]:
     while i < n:
         ch = src[i]
 
-        # Whitespace.
         if ch in " \t\r\n":
             advance()
             continue
 
-        # Line comments: // ... to end of line.
+        # Line comments.
         if ch == "/" and i + 1 < n and src[i + 1] == "/":
             while i < n and src[i] != "\n":
                 advance()
@@ -119,10 +121,12 @@ def tokenize(src: str, path: str) -> list[Token]:
 
         start_line, start_col = line, col
 
-        # Arrow -> (checked before '-' punctuation).
-        if ch == "-" and i + 1 < n and src[i + 1] == ">":
+        # Two-character tokens (-> == != <= >=).
+        two = src[i : i + 2]
+        if two in TWO_CHAR:
             advance(2)
-            tokens.append(Token("arrow", "->", start_line, start_col))
+            kind = "arrow" if two == "->" else "punct"
+            tokens.append(Token(kind, two, start_line, start_col))
             continue
 
         # Identifiers / keywords.
@@ -136,7 +140,7 @@ def tokenize(src: str, path: str) -> list[Token]:
             tokens.append(Token(kind, word, start_line, start_col))
             continue
 
-        # Integer literals (with optional '_' separators).
+        # Integer literals.
         if ch.isdigit():
             j = i
             while j < n and (src[j].isdigit() or src[j] == "_"):
@@ -148,7 +152,7 @@ def tokenize(src: str, path: str) -> list[Token]:
 
         # String literals with escapes \n \t \\ \".
         if ch == '"':
-            advance()  # opening quote
+            advance()
             buf: list[str] = []
             while i < n and src[i] != '"':
                 c = src[i]
@@ -189,7 +193,7 @@ def tokenize(src: str, path: str) -> list[Token]:
                     start_col,
                     'add a closing "',
                 )
-            advance()  # closing quote
+            advance()
             tokens.append(Token("str", "".join(buf), start_line, start_col))
             continue
 
@@ -199,7 +203,6 @@ def tokenize(src: str, path: str) -> list[Token]:
             tokens.append(Token("punct", ch, start_line, start_col))
             continue
 
-        # Anything else is a lexical error.
         raise Diagnostic(
             "CRX0001",
             f"unexpected character '{ch}'",
@@ -230,7 +233,7 @@ class StrLit(Node):
 
 @dataclass
 class IntLit(Node):
-    value: str  # raw digits, no separators
+    value: str
 
 
 @dataclass
@@ -245,8 +248,14 @@ class FieldAccess(Node):
 
 
 @dataclass
+class Unary(Node):
+    op: str  # "-"
+    operand: Node
+
+
+@dataclass
 class Binary(Node):
-    op: str  # + - * /
+    op: str  # + - * /  or  == != < <= > >=
     left: Node
     right: Node
 
@@ -254,7 +263,7 @@ class Binary(Node):
 @dataclass
 class StructLit(Node):
     type_name: str
-    inits: list[tuple[str, Node, int, int]]  # (field, value, line, col)
+    inits: list[tuple[str, Node, int, int]]
 
 
 @dataclass
@@ -279,6 +288,13 @@ class Let(Node):
 @dataclass
 class Return(Node):
     value: Node
+
+
+@dataclass
+class If(Node):
+    cond: Node
+    then_branch: list[Node]
+    else_branch: Optional[list[Node]]
 
 
 @dataclass
@@ -312,12 +328,18 @@ class Program(Node):
 # Parser — recursive descent.
 # ---------------------------------------------------------------------------
 
+ARITH_OPS = {"+", "-", "*", "/"}
+CMP_OPS = {"==", "!=", "<", "<=", ">", ">="}
+
 
 class Parser:
     def __init__(self, tokens: list[Token], path: str) -> None:
         self.tokens = tokens
         self.path = path
         self.pos = 0
+        # When True, an `ident {` is NOT read as a struct literal — this lets an
+        # `if` condition's trailing `{` open the block (e.g. `if ok { ... }`).
+        self.no_struct_lit = False
 
     def peek(self) -> Token:
         return self.tokens[self.pos]
@@ -331,6 +353,10 @@ class Parser:
     def at(self, kind: str, value: Optional[str] = None) -> bool:
         tok = self.peek()
         return tok.kind == kind and (value is None or tok.value == value)
+
+    def at_punct(self, *values: str) -> bool:
+        tok = self.peek()
+        return tok.kind == "punct" and tok.value in values
 
     def expect(self, kind: str, value: Optional[str] = None, *, what: str) -> Token:
         tok = self.peek()
@@ -368,7 +394,6 @@ class Parser:
         return Program(first.line, first.col, structs, funcs)
 
     def parse_type(self, *, what: str) -> Token:
-        # M2A types are simple identifiers: `i32` or a struct name.
         return self.expect("ident", what=what)
 
     def parse_struct_decl(self) -> StructDecl:
@@ -376,14 +401,14 @@ class Parser:
         name = self.expect("ident", what="a struct name")
         self.expect("punct", "{", what="`{`")
         fields: list[StructField] = []
-        while not self.at("punct", "}"):
+        while not self.at_punct("}"):
             if self.at("eof"):
                 self.expect("punct", "}", what="`}`")
             fname = self.expect("ident", what="a field name")
             self.expect("punct", ":", what="`:`")
             ftype = self.parse_type(what="a field type")
             fields.append(StructField(fname.value, ftype.value, fname.line, fname.col))
-            if self.at("punct", ","):
+            if self.at_punct(","):
                 self.advance()
             else:
                 break
@@ -394,7 +419,7 @@ class Parser:
         kw = self.expect("kw", "fn", what="`fn`")
         name = self.expect("ident", what="a function name")
         self.expect("punct", "(", what="`(`")
-        if not self.at("punct", ")"):
+        if not self.at_punct(")"):
             tok = self.peek()
             raise Diagnostic(
                 "CRX0015",
@@ -411,20 +436,26 @@ class Parser:
             self.advance()
             ret_type = self.parse_type(what="a return type").value
 
+        body = self.parse_block()
+        return Func(kw.line, kw.col, name.value, ret_type, body)
+
+    def parse_block(self) -> list[Node]:
         self.expect("punct", "{", what="`{`")
         body: list[Node] = []
-        while not self.at("punct", "}"):
+        while not self.at_punct("}"):
             if self.at("eof"):
                 self.expect("punct", "}", what="`}`")
             body.append(self.parse_statement())
         self.expect("punct", "}", what="`}`")
-        return Func(kw.line, kw.col, name.value, ret_type, body)
+        return body
 
     def parse_statement(self) -> Node:
         if self.at("kw", "let"):
             return self.parse_let()
         if self.at("kw", "return"):
             return self.parse_return()
+        if self.at("kw", "if"):
+            return self.parse_if()
         return self.parse_expr_stmt()
 
     def parse_let(self) -> Let:
@@ -447,34 +478,73 @@ class Parser:
         self.expect("punct", ";", what="`;`")
         return Return(kw.line, kw.col, value)
 
+    def parse_if(self) -> If:
+        kw = self.expect("kw", "if", what="`if`")
+        saved = self.no_struct_lit
+        self.no_struct_lit = True
+        cond = self.parse_expr()
+        self.no_struct_lit = saved
+        then_branch = self.parse_block()
+        else_branch: Optional[list[Node]] = None
+        if self.at("kw", "else"):
+            self.advance()
+            if self.at("kw", "if"):
+                else_branch = [self.parse_if()]
+            else:
+                else_branch = self.parse_block()
+        return If(kw.line, kw.col, cond, then_branch, else_branch)
+
     def parse_expr_stmt(self) -> ExprStmt:
         expr = self.parse_expr()
         self.expect("punct", ";", what="`;`")
         return ExprStmt(expr.line, expr.col, expr)
 
-    # Expression precedence: add/sub (loosest) -> mul/div -> postfix `.` -> primary
+    # Precedence: equality < relational < add/sub < mul/div < unary < postfix
     def parse_expr(self) -> Node:
-        return self.parse_add()
+        return self.parse_equality()
+
+    def parse_equality(self) -> Node:
+        node = self.parse_relational()
+        while self.at_punct("==", "!="):
+            op = self.advance()
+            right = self.parse_relational()
+            node = Binary(op.line, op.col, op.value, node, right)
+        return node
+
+    def parse_relational(self) -> Node:
+        node = self.parse_add()
+        while self.at_punct("<", "<=", ">", ">="):
+            op = self.advance()
+            right = self.parse_add()
+            node = Binary(op.line, op.col, op.value, node, right)
+        return node
 
     def parse_add(self) -> Node:
         node = self.parse_mul()
-        while self.at("punct", "+") or self.at("punct", "-"):
+        while self.at_punct("+", "-"):
             op = self.advance()
             right = self.parse_mul()
             node = Binary(op.line, op.col, op.value, node, right)
         return node
 
     def parse_mul(self) -> Node:
-        node = self.parse_postfix()
-        while self.at("punct", "*") or self.at("punct", "/"):
+        node = self.parse_unary()
+        while self.at_punct("*", "/"):
             op = self.advance()
-            right = self.parse_postfix()
+            right = self.parse_unary()
             node = Binary(op.line, op.col, op.value, node, right)
         return node
 
+    def parse_unary(self) -> Node:
+        if self.at_punct("-"):
+            op = self.advance()
+            operand = self.parse_unary()
+            return Unary(op.line, op.col, "-", operand)
+        return self.parse_postfix()
+
     def parse_postfix(self) -> Node:
         node = self.parse_primary()
-        while self.at("punct", "."):
+        while self.at_punct("."):
             self.advance()
             fname = self.expect("ident", what="a field name")
             node = FieldAccess(fname.line, fname.col, node, fname.value)
@@ -490,14 +560,17 @@ class Parser:
             return IntLit(tok.line, tok.col, tok.value)
         if tok.kind == "punct" and tok.value == "(":
             self.advance()
+            saved = self.no_struct_lit
+            self.no_struct_lit = False  # struct literals are fine inside parentheses
             inner = self.parse_expr()
+            self.no_struct_lit = saved
             self.expect("punct", ")", what="`)`")
             return inner
         if tok.kind == "ident":
             self.advance()
-            if self.at("punct", "{"):
+            if self.at_punct("{") and not self.no_struct_lit:
                 return self.parse_struct_lit(tok)
-            if self.at("punct", "("):
+            if self.at_punct("("):
                 return self.parse_call(tok)
             return VarRef(tok.line, tok.col, tok.value)
         raise Diagnostic(
@@ -511,12 +584,12 @@ class Parser:
     def parse_struct_lit(self, name: Token) -> StructLit:
         self.expect("punct", "{", what="`{`")
         inits: list[tuple[str, Node, int, int]] = []
-        while not self.at("punct", "}"):
+        while not self.at_punct("}"):
             fname = self.expect("ident", what="a field name")
             self.expect("punct", ":", what="`:`")
             value = self.parse_expr()
             inits.append((fname.value, value, fname.line, fname.col))
-            if self.at("punct", ","):
+            if self.at_punct(","):
                 self.advance()
             else:
                 break
@@ -526,9 +599,9 @@ class Parser:
     def parse_call(self, callee: Token) -> Call:
         self.expect("punct", "(", what="`(`")
         args: list[Node] = []
-        if not self.at("punct", ")"):
+        if not self.at_punct(")"):
             args.append(self.parse_expr())
-            while self.at("punct", ","):
+            while self.at_punct(","):
                 self.advance()
                 args.append(self.parse_expr())
         self.expect("punct", ")", what="`)`")
@@ -536,13 +609,23 @@ class Parser:
 
 
 # ---------------------------------------------------------------------------
-# Type checker
-#
-# Types are represented as strings: "i32", "()" (unit), or a struct name.
+# Type checker. Types: "i32", "bool", "()" (unit), or a struct name.
 # ---------------------------------------------------------------------------
 
 I32 = "i32"
+BOOL = "bool"
 UNIT = "()"
+
+
+def block_returns(stmts: list[Node]) -> bool:
+    """True if executing `stmts` always reaches a `return`."""
+    for stmt in stmts:
+        if isinstance(stmt, Return):
+            return True
+        if isinstance(stmt, If) and stmt.else_branch is not None:
+            if block_returns(stmt.then_branch) and block_returns(stmt.else_branch):
+                return True
+    return False
 
 
 class Checker:
@@ -558,7 +641,7 @@ class Checker:
 
     def collect_structs(self) -> None:
         for decl in self.program.structs:
-            seen: dict[str, StructField] = {}
+            seen: set[str] = set()
             for fld in decl.fields:
                 if fld.name in seen:
                     raise Diagnostic(
@@ -569,9 +652,8 @@ class Checker:
                         fld.col,
                         "each struct field must have a unique name",
                     )
-                seen[fld.name] = fld
+                seen.add(fld.name)
             self.structs[decl.name] = decl
-        # Validate field types after all struct names are known.
         for decl in self.program.structs:
             for fld in decl.fields:
                 if fld.type_name == I32:
@@ -579,11 +661,11 @@ class Checker:
                 if fld.type_name in self.structs:
                     raise Diagnostic(
                         "CRX0015",
-                        "struct-typed fields are not supported in M2A",
+                        "struct-typed fields are not supported yet",
                         self.path,
                         fld.line,
                         fld.col,
-                        "M2A struct fields must be `i32`",
+                        "struct fields must be `i32`",
                     )
                 raise Diagnostic(
                     "CRX0021",
@@ -591,7 +673,7 @@ class Checker:
                     self.path,
                     fld.line,
                     fld.col,
-                    "M2A field types must be `i32`",
+                    "struct field types must be `i32`",
                 )
 
     def check_main(self) -> Func:
@@ -632,38 +714,59 @@ class Checker:
                 "change the return type to `-> i32`",
             )
 
-        saw_return = False
-        for stmt in main.body:
-            if isinstance(stmt, Let):
-                self.check_let(stmt)
-            elif isinstance(stmt, Return):
-                self.check_return(stmt)
-                saw_return = True
-            elif isinstance(stmt, ExprStmt):
-                self.check_expr_stmt(stmt)
-            else:  # pragma: no cover
-                raise Diagnostic(
-                    "CRX0015",
-                    "unsupported statement",
-                    self.path,
-                    stmt.line,
-                    stmt.col,
-                )
-
-        if not saw_return:
+        self.check_block(main.body)
+        if not block_returns(main.body):
             raise Diagnostic(
                 "CRX0011",
-                "`main` must return an `i32`",
+                "`main` must return an `i32` on every path",
                 self.path,
                 main.line,
                 main.col,
-                "add `return 0;`",
+                "add a `return` (e.g. `return 0;`)",
             )
         return main
+
+    def check_block(self, stmts: list[Node]) -> None:
+        # Block scoping: bindings introduced here do not escape the block.
+        saved = dict(self.scope)
+        for stmt in stmts:
+            self.check_stmt(stmt)
+        self.scope = saved
+
+    def check_stmt(self, stmt: Node) -> None:
+        if isinstance(stmt, Let):
+            self.check_let(stmt)
+        elif isinstance(stmt, Return):
+            self.check_return(stmt)
+        elif isinstance(stmt, If):
+            self.check_if(stmt)
+        elif isinstance(stmt, ExprStmt):
+            self.check_expr_stmt(stmt)
+        else:  # pragma: no cover
+            raise Diagnostic(
+                "CRX0015", "unsupported statement", self.path, stmt.line, stmt.col
+            )
+
+    def check_if(self, stmt: If) -> None:
+        cond_type = self.infer(stmt.cond)
+        if cond_type != BOOL:
+            raise Diagnostic(
+                "CRX0030",
+                f"`if` condition must be `bool`, found `{cond_type}`",
+                self.path,
+                stmt.cond.line,
+                stmt.cond.col,
+                "use a comparison, e.g. `if x < y { ... }`",
+            )
+        self.check_block(stmt.then_branch)
+        if stmt.else_branch is not None:
+            self.check_block(stmt.else_branch)
 
     def resolve_type(self, name: str, line: int, col: int) -> str:
         if name == I32:
             return I32
+        if name == BOOL:
+            return BOOL
         if name in self.structs:
             return name
         raise Diagnostic(
@@ -672,7 +775,7 @@ class Checker:
             self.path,
             line,
             col,
-            "M2A knows `i32` and declared struct types",
+            "known types: `i32`, `bool`, and declared struct types",
         )
 
     def check_let(self, stmt: Let) -> None:
@@ -745,7 +848,6 @@ class Checker:
 
     def infer(self, expr: Node) -> str:
         if isinstance(expr, IntLit):
-            # Context-typed; defaults to i32 (the only integer type in M2A).
             value = int(expr.value)
             if not (-(2**31) <= value <= 2**31 - 1):
                 raise Diagnostic(
@@ -778,8 +880,7 @@ class Checker:
                     expr.line,
                     expr.col,
                 )
-            decl = self.structs[obj_type]
-            for fld in decl.fields:
+            for fld in self.structs[obj_type].fields:
                 if fld.name == expr.field_name:
                     return fld.type_name
             raise Diagnostic(
@@ -789,9 +890,40 @@ class Checker:
                 expr.line,
                 expr.col,
             )
+        if isinstance(expr, Unary):
+            operand = self.infer(expr.operand)
+            if operand != I32:
+                raise Diagnostic(
+                    "CRX0028",
+                    f"unary `-` requires an `i32` operand, found `{operand}`",
+                    self.path,
+                    expr.operand.line,
+                    expr.operand.col,
+                )
+            return I32
         if isinstance(expr, Binary):
-            left = self.infer(expr.left)
-            right = self.infer(expr.right)
+            return self.infer_binary(expr)
+        if isinstance(expr, StructLit):
+            return self.infer_struct_lit(expr)
+        if isinstance(expr, StrLit):
+            raise Diagnostic(
+                "CRX0015",
+                "string values are only supported as `println` arguments yet",
+                self.path,
+                expr.line,
+                expr.col,
+            )
+        if isinstance(expr, Call):
+            self.check_println(expr)
+            return UNIT
+        raise Diagnostic(  # pragma: no cover
+            "CRX0015", "unsupported expression", self.path, expr.line, expr.col
+        )
+
+    def infer_binary(self, expr: Binary) -> str:
+        left = self.infer(expr.left)
+        right = self.infer(expr.right)
+        if expr.op in ARITH_OPS:
             if left != I32 or right != I32:
                 bad = expr.left if left != I32 else expr.right
                 raise Diagnostic(
@@ -803,28 +935,18 @@ class Checker:
                     bad.col,
                 )
             return I32
-        if isinstance(expr, StructLit):
-            return self.infer_struct_lit(expr)
-        if isinstance(expr, StrLit):
-            # `str` values are not first-class until M3; only println accepts them.
+        # Comparison operator.
+        if left != I32 or right != I32:
+            bad = expr.left if left != I32 else expr.right
             raise Diagnostic(
-                "CRX0015",
-                "string values are only supported as `println` arguments yet",
+                "CRX0029",
+                f"comparison `{expr.op}` requires `i32` operands, "
+                f"found `{left}` and `{right}`",
                 self.path,
-                expr.line,
-                expr.col,
+                bad.line,
+                bad.col,
             )
-        if isinstance(expr, Call):
-            # A call in value position: println returns unit, nothing else exists.
-            self.check_println(expr)
-            return UNIT
-        raise Diagnostic(  # pragma: no cover
-            "CRX0015",
-            "unsupported expression",
-            self.path,
-            expr.line,
-            expr.col,
-        )
+        return BOOL
 
     def infer_struct_lit(self, lit: StructLit) -> str:
         if lit.type_name not in self.structs:
@@ -882,9 +1004,60 @@ class Checker:
 # C emitter — readable, portable C.
 # ---------------------------------------------------------------------------
 
+ARITH_HELPER = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
+
+# Runtime helper definitions. Emitted only when referenced; `panic` is pulled in
+# by any checked helper. Order here is the emission order.
+HELPER_DEFS: dict[str, str] = {
+    "panic": (
+        "static void crx_panic(const char *msg) {\n"
+        '    fprintf(stderr, "panic: %s\\n", msg);\n'
+        "    exit(101);\n"
+        "}"
+    ),
+    "add": (
+        "static int32_t crx_checked_add_i32(int32_t a, int32_t b) {\n"
+        "    int64_t r = (int64_t)a + (int64_t)b;\n"
+        '    if (r < INT32_MIN || r > INT32_MAX) crx_panic("i32 addition overflow");\n'
+        "    return (int32_t)r;\n"
+        "}"
+    ),
+    "sub": (
+        "static int32_t crx_checked_sub_i32(int32_t a, int32_t b) {\n"
+        "    int64_t r = (int64_t)a - (int64_t)b;\n"
+        '    if (r < INT32_MIN || r > INT32_MAX) crx_panic("i32 subtraction overflow");\n'
+        "    return (int32_t)r;\n"
+        "}"
+    ),
+    "mul": (
+        "static int32_t crx_checked_mul_i32(int32_t a, int32_t b) {\n"
+        "    int64_t r = (int64_t)a * (int64_t)b;\n"
+        '    if (r < INT32_MIN || r > INT32_MAX) crx_panic("i32 multiplication overflow");\n'
+        "    return (int32_t)r;\n"
+        "}"
+    ),
+    "div": (
+        "static int32_t crx_checked_div_i32(int32_t a, int32_t b) {\n"
+        '    if (b == 0) crx_panic("i32 division by zero");\n'
+        '    if (a == INT32_MIN && b == -1) crx_panic("i32 division overflow");\n'
+        "    return a / b;\n"
+        "}"
+    ),
+    "neg": (
+        "static int32_t crx_checked_neg_i32(int32_t a) {\n"
+        '    if (a == INT32_MIN) crx_panic("i32 negation overflow");\n'
+        "    return -a;\n"
+        "}"
+    ),
+}
+
 
 def c_type(t: str) -> str:
-    return "int32_t" if t == I32 else t  # struct names map to their typedef
+    if t == I32:
+        return "int32_t"
+    if t == BOOL:
+        return "bool"
+    return t  # struct name -> its typedef
 
 
 def c_string_literal(value: str) -> str:
@@ -906,65 +1079,101 @@ def c_string_literal(value: str) -> str:
     return "".join(out)
 
 
-def emit_expr(expr: Node) -> str:
-    if isinstance(expr, IntLit):
-        return str(int(expr.value))
-    if isinstance(expr, VarRef):
-        return expr.name
-    if isinstance(expr, FieldAccess):
-        return f"{emit_expr(expr.obj)}.{expr.field_name}"
-    if isinstance(expr, Binary):
-        return f"({emit_expr(expr.left)} {expr.op} {emit_expr(expr.right)})"
-    if isinstance(expr, StructLit):
-        parts = ", ".join(
-            f".{fname} = {emit_expr(value)}" for fname, value, _, _ in expr.inits
-        )
-        return f"({expr.type_name}){{ {parts} }}"
-    if isinstance(expr, StrLit):
-        return c_string_literal(expr.value)
-    raise AssertionError(f"cannot emit expression {expr!r}")  # pragma: no cover
+class Emitter:
+    def __init__(self, program: Program, main: Func, source_path: str) -> None:
+        self.program = program
+        self.main = main
+        self.source_path = source_path
+        self.includes: set[str] = set()
+        self.helpers: set[str] = set()
 
+    def use_checked(self, helper: str) -> None:
+        self.helpers.add(helper)
+        self.helpers.add("panic")
+        self.includes |= {"stdint.h", "stdio.h", "stdlib.h"}
 
-def emit_c(program: Program, main: Func, source_path: str) -> str:
-    includes: set[str] = set()
-    body_lines: list[str] = []
-
-    for stmt in main.body:
-        if isinstance(stmt, Let):
-            includes.add("stdint.h")
-            body_lines.append(
-                f"    {c_type(stmt.declared_type)} {stmt.name} = "
-                f"{emit_expr(stmt.value)};"
+    def expr(self, node: Node) -> str:
+        if isinstance(node, IntLit):
+            return str(int(node.value))
+        if isinstance(node, VarRef):
+            return node.name
+        if isinstance(node, FieldAccess):
+            return f"{self.expr(node.obj)}.{node.field_name}"
+        if isinstance(node, Unary):  # only "-"
+            self.use_checked("neg")
+            return f"crx_checked_neg_i32({self.expr(node.operand)})"
+        if isinstance(node, Binary):
+            if node.op in ARITH_HELPER:
+                name = ARITH_HELPER[node.op]
+                self.use_checked(name)
+                return f"crx_checked_{name}_i32({self.expr(node.left)}, {self.expr(node.right)})"
+            return f"({self.expr(node.left)} {node.op} {self.expr(node.right)})"
+        if isinstance(node, StructLit):
+            parts = ", ".join(
+                f".{fname} = {self.expr(value)}" for fname, value, _, _ in node.inits
             )
-        elif isinstance(stmt, Return):
-            body_lines.append(f"    return {emit_expr(stmt.value)};")
-        elif isinstance(stmt, ExprStmt) and isinstance(stmt.expr, Call):
-            includes.add("stdio.h")
-            arg = stmt.expr.args[0]
+            return f"({node.type_name}){{ {parts} }}"
+        if isinstance(node, StrLit):
+            return c_string_literal(node.value)
+        raise AssertionError(f"cannot emit expression {node!r}")  # pragma: no cover
+
+    def stmt(self, node: Node, indent: int) -> list[str]:
+        pad = "    " * indent
+        if isinstance(node, Let):
+            self.includes.add("stdbool.h" if node.declared_type == BOOL else "stdint.h")
+            return [f"{pad}{c_type(node.declared_type)} {node.name} = {self.expr(node.value)};"]
+        if isinstance(node, Return):
+            return [f"{pad}return {self.expr(node.value)};"]
+        if isinstance(node, ExprStmt) and isinstance(node.expr, Call):
+            self.includes.add("stdio.h")
+            arg = node.expr.args[0]
             assert isinstance(arg, StrLit)
-            body_lines.append(f"    puts({c_string_literal(arg.value)});")
+            return [f"{pad}puts({c_string_literal(arg.value)});"]
+        if isinstance(node, If):
+            lines = [f"{pad}if ({self.expr(node.cond)}) {{"]
+            for s in node.then_branch:
+                lines += self.stmt(s, indent + 1)
+            if node.else_branch is not None:
+                lines.append(f"{pad}}} else {{")
+                for s in node.else_branch:
+                    lines += self.stmt(s, indent + 1)
+            lines.append(f"{pad}}}")
+            return lines
+        raise AssertionError(f"cannot emit statement {node!r}")  # pragma: no cover
 
-    struct_lines: list[str] = []
-    for decl in program.structs:
-        includes.add("stdint.h")
-        struct_lines.append(f"typedef struct {decl.name} {{")
-        for fld in decl.fields:
-            struct_lines.append(f"    {c_type(fld.type_name)} {fld.name};")
-        struct_lines.append(f"}} {decl.name};")
-        struct_lines.append("")
+    def emit(self) -> str:
+        body_lines: list[str] = []
+        for s in self.main.body:
+            body_lines += self.stmt(s, 1)
 
-    lines: list[str] = []
-    lines.append(f"/* Generated by crustc (CRusty++ v0.1) from {source_path} */")
-    lines.append("/* Do not edit by hand. */")
-    for header in sorted(includes):
-        lines.append(f"#include <{header}>")
-    lines.append("")
-    lines.extend(struct_lines)
-    lines.append("int main(void) {")
-    lines.extend(body_lines)
-    lines.append("}")
-    lines.append("")
-    return "\n".join(lines)
+        struct_lines: list[str] = []
+        for decl in self.program.structs:
+            self.includes.add("stdint.h")
+            struct_lines.append(f"typedef struct {decl.name} {{")
+            for fld in decl.fields:
+                struct_lines.append(f"    {c_type(fld.type_name)} {fld.name};")
+            struct_lines.append(f"}} {decl.name};")
+            struct_lines.append("")
+
+        helper_lines: list[str] = []
+        for name in HELPER_DEFS:  # fixed order
+            if name in self.helpers:
+                helper_lines.append(HELPER_DEFS[name])
+                helper_lines.append("")
+
+        lines: list[str] = []
+        lines.append(f"/* Generated by crustc (CRusty++ v0.1) from {self.source_path} */")
+        lines.append("/* Do not edit by hand. */")
+        for header in sorted(self.includes):
+            lines.append(f"#include <{header}>")
+        lines.append("")
+        lines.extend(helper_lines)
+        lines.extend(struct_lines)
+        lines.append("int main(void) {")
+        lines.extend(body_lines)
+        lines.append("}")
+        lines.append("")
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -978,7 +1187,7 @@ def compile_to_c(path: str) -> str:
     tokens = tokenize(src, path)
     program = Parser(tokens, path).parse_program()
     main = Checker(program, path).run()
-    return emit_c(program, main, path)
+    return Emitter(program, main, path).emit()
 
 
 def fail(diag: Diagnostic) -> NoReturn:

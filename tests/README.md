@@ -2,24 +2,30 @@
 
 The CRusty++ conformance test suite.
 
-**Status: M1 + M2A harnesses in place.**
+**Status: M1 + M2A + M2B harnesses in place.**
 
-- [`m1_hello.py`](./m1_hello.py) — M1 acceptance test. Compiles
-  [`../examples/hello.crust`](../examples/hello.crust) end-to-end and asserts:
-  (1) emitted C matches the golden, (2) it builds with the system C compiler,
-  (3) stdout is exactly `Hello, CRusty++!\n`, (4) exit code is `0`.
-- [`m2a_structs.py`](./m2a_structs.py) — M2A acceptance test. Compiles
-  [`../examples/m2_structs.crust`](../examples/m2_structs.crust) end-to-end and
-  asserts: (1) emitted C matches the golden, (2) it builds, (3) no stdout,
-  (4) exit code is `0`.
-- [`golden/hello.c`](./golden/hello.c), [`golden/m2_structs.c`](./golden/m2_structs.c)
-  — golden generated C for the codegen stability checks.
+Acceptance tests (compile → build → run → assert golden C + exit code):
 
-Run them:
+- [`m1_hello.py`](./m1_hello.py) — `hello.crust`; stdout `Hello, CRusty++!\n`, exit `0`.
+- [`m2a_structs.py`](./m2a_structs.py) — `m2_structs.crust`; no stdout, exit `0`.
+- [`m2b_checked_if.py`](./m2b_checked_if.py) — `m2b_checked_if.crust`; exit `0`.
+
+Behavior tests (checked arithmetic must abort):
+
+- [`m2b_behavior.py`](./m2b_behavior.py) — builds and runs each program in
+  [`behavior/`](./behavior/) and asserts exit code `101`: `add_overflow`,
+  `sub_overflow`, `mul_overflow`, `div_zero`, `div_overflow`, `neg_overflow`.
+
+Goldens live in [`golden/`](./golden/) (one `.c` per acceptance example) for the
+codegen stability checks.
+
+Run them all:
 
 ```sh
 python3 tests/m1_hello.py
 python3 tests/m2a_structs.py
+python3 tests/m2b_checked_if.py
+python3 tests/m2b_behavior.py
 ```
 
 The broader category layout below is the plan for M2+; only the `examples`

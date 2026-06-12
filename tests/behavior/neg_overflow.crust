@@ -1,0 +1,6 @@
+// Behavior test: unary negation of i32::MIN must abort with exit code 101.
+fn main() -> i32 {
+    let m: i32 = -2147483647 - 1;   // i32::MIN
+    let r: i32 = -m;                // checked negation overflow -> panic
+    return r;
+}

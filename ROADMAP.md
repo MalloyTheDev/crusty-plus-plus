@@ -28,10 +28,14 @@ conform. **No compiler code is written before this phase closes.**
       Compiler implemented in Python 3 (stdlib only).
 - [x] **M2A — plain structs + local computation.** Structs, struct literals,
       field access, `let` bindings, integer arithmetic → `examples/m2_structs.crust`;
-      `tests/m2a_structs.py` passes. (Checked arithmetic deferred — see
-      `compiler/README.md`.)
-- [ ] M2B — function parameters/calls, `if`/`else`, `while`/`loop`, remaining
-      integer types and casts, checked arithmetic. (No I/O.)
+      `tests/m2a_structs.py` passes.
+- [x] **M2B — checked arithmetic + branching.** `bool`, comparisons, `if`/`else`,
+      and checked `i32` arithmetic (overflow / div-by-zero / negation overflow
+      abort with exit 101) → `examples/m2b_checked_if.crust`;
+      `tests/m2b_checked_if.py` and `tests/m2b_behavior.py` pass. Closes the M2A
+      checked-arithmetic deferral.
+- [ ] M2C — `while`/`loop`/`break`/`continue`, `let mut` + assignment,
+      remaining integer types and `as` casts, `&& || !` and `%`. (No I/O.)
 - [ ] M3 — slices (`str`, `[]u8`), `Result`/`Option`, `?`, prelude → compile
       `file_read.crust` and `crust_inspect.crust`.
 - [ ] Type checker for the full `v0.1` type set

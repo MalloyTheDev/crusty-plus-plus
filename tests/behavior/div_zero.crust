@@ -1,0 +1,6 @@
+// Behavior test: i32 division by zero must abort with exit code 101.
+fn main() -> i32 {
+    let z: i32 = 0;
+    let r: i32 = 1 / z;        // checked division by zero -> panic
+    return r;
+}

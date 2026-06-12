@@ -1,0 +1,25 @@
+// m2b_checked_if.crust
+//
+// M2B target program: checked integer arithmetic, comparisons, a `bool` binding,
+// and `if`/`else` control flow. No loops, no I/O, no user functions.
+//
+// All arithmetic is checked: on overflow or division by zero the program would
+// abort with exit code 101. This program stays in range, so it follows the
+// success path and returns 0.
+
+fn main() -> i32 {
+    let a: i32 = 20;
+    let b: i32 = 22;
+    let sum: i32 = a + b;          // 42 (checked addition)
+    let diff: i32 = b - a;         // 2  (checked subtraction)
+    let ok: bool = sum == 42;      // comparison stored in a bool binding
+    if ok {
+        if diff < 5 {
+            return 0;              // success path
+        } else {
+            return 2;
+        }
+    } else {
+        return 1;
+    }
+}
