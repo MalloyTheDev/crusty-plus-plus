@@ -2,14 +2,27 @@
 //
 // A target program exercising recoverable error handling.
 // Demonstrates: `Result`, the `?` propagation operator, `Err`/`Ok`,
-//               borrows (`&str` parameters), and returning a nonzero exit code.
+//               borrows, and returning a nonzero exit code.
 //
-// NOTE: `read_to_string` is shown as a prelude/IO primitive. Its exact name and
-//       signature are still open in spec/syntax.md (prelude section) and must be
-//       fixed before v0.1 freezes. The control-flow shape, however, is final.
+// ┌───────────────────────────────────────────────────────────────────────────┐
+// │ NOT A v0.1 SUCCESS CRITERION YET. This example depends on UNRESOLVED open   │
+// │ questions and cannot be frozen until they are decided. See                 │
+// │ spec/freeze-checklist.md:                                                   │
+// │   • B1  str vs &str model        → param types below use the unresolved    │
+// │                                      `&str`; should become `str` if B1 is   │
+// │                                      decided as recommended.                │
+// │   • B2  Option/Result<> syntax   → `Result<String, str>` is not parseable  │
+// │                                      under the current grammar.             │
+// │   • B4  prelude is undefined     → `read_to_string`, `string_len`,         │
+// │                                      `is_err`, `unwrap` are NOT defined in  │
+// │                                      any spec. `read_to_string` (file I/O)  │
+// │                                      is deferred entirely.                  │
+// │ The control-flow shape (Result + `?` + early exit) is what this example    │
+// │ pins down; the spellings above are placeholders pending freeze.            │
+// └───────────────────────────────────────────────────────────────────────────┘
 //
-// Expected behavior: reads two files, prints the combined length, exits 0 on
-//                    success; on any read failure, prints the error and exits 1.
+// Intended behavior once the above freeze: reads two files, prints status, exits
+// 0 on success; on any read failure, prints the error and exits 1.
 
 // Reads a file and returns its contents as an owned String, or an error message.
 fn read_file(path: &str) -> Result<String, str> {

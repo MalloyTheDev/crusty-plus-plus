@@ -19,6 +19,32 @@ The rest is detail.
 
 ---
 
+## 0. Honesty about scope (what this model is and is not)
+
+So the model is neither oversold nor misimplemented, v0.1 commits to the
+following plainly:
+
+- **CRusty++ v0.1 is safer than C, but not Rust-level memory-safe.** It removes
+  the most common C footguns (use-after-free of moved values, double-free) but
+  does not prove the absence of every aliasing or lifetime bug.
+- **There is no full borrow checker in v0.1.** Borrows are checked **lexically**:
+  a borrow is live from its creation to the end of the enclosing block (§4).
+  There is no flow-sensitive non-lexical lifetime analysis and no named
+  lifetimes (`'a`) — those are [non-goals](../NON_GOALS.md) for now.
+- **References (`&T`, `&mut T`) are non-null.** There is no null reference. A
+  reference always points at a live value of the right type.
+- **v0.1 has no raw pointers and no `unsafe`.** When raw pointers are added in a
+  later version, **dereferencing a raw pointer will be `unsafe`** and outside the
+  safe subset. v0.1 simply does not have them.
+- **Slices are pointer + length.** The only slice type in v0.1 is `str` (an
+  immutable `{ ptr, len }` view; §2). General arrays and user slices are
+  deferred.
+- **Arena/allocator work is planned but not required** for the first compiler
+  prototype. v0.1 relies on scope-bound drops; a custom allocator/arena is a
+  later concern and is not a precondition for the prototype.
+
+---
+
 ## 1. Ownership
 
 - Every value is owned by exactly one binding (a `let`/`let mut` variable, a

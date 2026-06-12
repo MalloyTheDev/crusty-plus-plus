@@ -6,6 +6,11 @@
 //
 // Expected behavior: builds a small record, inspects it through a borrow,
 //                    runs a counted loop, and exits 0.
+//
+// v0.1 status: compliant EXCEPT it depends on the integer-literal typing rule
+//              (spec/freeze-checklist.md B5) — e.g. `s.id * 2`, `i + 1`,
+//              `count >= 3` mix a typed operand with an untyped literal. Trivial
+//              to resolve (literal takes the operand's type), but unfrozen.
 
 struct Sample {
     id: i32,
