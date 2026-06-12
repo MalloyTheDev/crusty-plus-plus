@@ -1,0 +1,10 @@
+// `?` short-circuits on Err: f returns the Err, inspected in main without `?`.
+fn g(x: i32) -> Result<i32, i32> { return Err(99); }
+fn f(x: i32) -> Result<i32, i32> {
+    let y: i32 = g(x)?;      // returns Err(99) immediately
+    return Ok(y);            // unreachable
+}
+fn main() -> i32 {
+    let r: Result<i32, i32> = f(5);
+    if is_err(r) { return 0; } else { return 1; }
+}

@@ -96,14 +96,22 @@ fn total() -> Result<i32, FileError> {
 
 Frozen rules:
 
-- `?` is valid **only** inside a function whose return type is `Result<T, E>`.
-- `expr?` requires `expr` to be `Result<T, E>` whose `E` matches the enclosing
-  function's error type. On `Ok(v)` it evaluates to `v`; on `Err(e)` it executes
-  `return Err(e)` immediately.
-- v0.1 does **not** define `?` on `Option`.
+- `?` is valid **only** inside a function whose return type is `Result<U, E>`.
+  Using `?` inside a function whose return type is not a `Result` is a compile
+  error (diagnostic).
+- `expr?` requires `expr` to be `Result<T, E>`. The expression's error type `E`
+  must match the enclosing function's error type `E` **exactly** — there is **no
+  implicit error conversion** in v0.1. A mismatched error type is a compile error
+  (diagnostic). On `Ok(v)` the expression evaluates to the payload `v` (type
+  `T`); on `Err(e)` the enclosing function immediately executes `return Err(e)`,
+  constructing an `Err` of that function's own `Result<U, E>` return type.
+- v0.1 does **not** define `?` on `Option`; applying `?` to an `Option`-typed
+  expression is a compile error (diagnostic).
 - `?` is **not** usable in `main` when `main` returns `i32` (its return type is
-  not `Result`). v0.1 examples use `fn main() -> i32` and therefore do not use
-  `?` in `main`.
+  not `Result`); using `?` there is a compile error (diagnostic). v0.1 examples
+  use `fn main() -> i32` and therefore do not use `?` in `main`. The
+  `fn main() -> Result<i32, E>` form remains **deferred** (§6) and must not be
+  written.
 
 ## 4. `panic` — unrecoverable failure
 

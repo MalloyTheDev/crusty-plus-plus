@@ -1,0 +1,10 @@
+// `?` passes the Ok payload through.
+fn g(x: i32) -> Result<i32, i32> { return Ok(x); }
+fn f(x: i32) -> Result<i32, i32> {
+    let y: i32 = g(x)?;
+    return Ok(y + 1);
+}
+fn main() -> i32 {
+    let r: Result<i32, i32> = f(5);
+    if unwrap(r) == 6 { return 0; } else { return 1; }
+}

@@ -78,7 +78,7 @@ KEYWORDS = {
 }
 
 # Single-character punctuation the implemented grammar can encounter.
-PUNCT = set("(){}[];:,.=+-*/<>")
+PUNCT = set("(){}[];:,.=+-*/<>?")
 
 # Two-character tokens, checked before single-character punctuation.
 TWO_CHAR = {"->", "==", "!=", "<=", ">="}
@@ -355,6 +355,19 @@ class Continue(Node):
 
 
 @dataclass
+class TryExpr(Node):
+    inner: Node  # a `Result<T, E>` expression; `expr?`
+
+
+@dataclass
+class Param:
+    name: str
+    type_name: str
+    line: int
+    col: int
+
+
+@dataclass
 class StructField:
     name: str
     type_name: str
@@ -372,6 +385,7 @@ class StructDecl(Node):
 class Func(Node):
     name: str
     ret_type: Optional[str]
+    params: list[Param] = field(default_factory=list)
     body: list[Node] = field(default_factory=list)
 
 
@@ -523,16 +537,12 @@ class Parser:
         kw = self.expect("kw", "fn", what="`fn`")
         name = self.expect("ident", what="a function name")
         self.expect("punct", "(", what="`(`")
+        params: list[Param] = []
         if not self.at_punct(")"):
-            tok = self.peek()
-            raise Diagnostic(
-                "CRX0015",
-                "function parameters are not supported yet",
-                self.path,
-                tok.line,
-                tok.col,
-                "the current milestones compile only `fn main() -> i32`",
-            )
+            params.append(self.parse_param())
+            while self.at_punct(","):
+                self.advance()
+                params.append(self.parse_param())
         self.expect("punct", ")", what="`)`")
 
         ret_type: Optional[str] = None
@@ -541,7 +551,13 @@ class Parser:
             ret_type = self.parse_type(what="a return type").value
 
         body = self.parse_block()
-        return Func(kw.line, kw.col, name.value, ret_type, body)
+        return Func(kw.line, kw.col, name.value, ret_type, params, body)
+
+    def parse_param(self) -> Param:
+        pname = self.expect("ident", what="a parameter name")
+        self.expect("punct", ":", what="`:`")
+        ptype = self.parse_type(what="a parameter type")
+        return Param(pname.value, ptype.value, pname.line, pname.col)
 
     def parse_block(self) -> list[Node]:
         self.expect("punct", "{", what="`{`")
@@ -692,10 +708,14 @@ class Parser:
 
     def parse_postfix(self) -> Node:
         node = self.parse_primary()
-        while self.at_punct("."):
-            self.advance()
-            fname = self.expect("ident", what="a field name")
-            node = FieldAccess(fname.line, fname.col, node, fname.value)
+        while self.at_punct(".") or self.at_punct("?"):
+            if self.at_punct("."):
+                self.advance()
+                fname = self.expect("ident", what="a field name")
+                node = FieldAccess(fname.line, fname.col, node, fname.value)
+            else:  # "?"
+                q = self.advance()
+                node = TryExpr(q.line, q.col, node)
         return node
 
     def parse_primary(self) -> Node:
@@ -791,6 +811,11 @@ STR = "str"
 SLICE_U8 = "[]u8"
 SLICE_TYPES = {STR, SLICE_U8}  # built-in fat slices (ptr + len)
 
+# Reserved built-in callable / constructor names (cannot be user functions).
+PRELUDE_FUNCS = {"print", "println", "read_all_bytes", "is_ok", "is_err",
+                 "unwrap", "panic"}
+CONSTRUCTOR_NAMES = {"Ok", "Err", "Some", "None"}
+
 SIGNED_TYPES = {"i8", "i16", "i32", "i64"}
 UNSIGNED_TYPES = {"u8", "u16", "u32", "u64", "usize"}
 NUMERIC_TYPES = SIGNED_TYPES | UNSIGNED_TYPES
@@ -885,13 +910,17 @@ class Checker:
         self.program = program
         self.path = path
         self.structs: dict[str, StructDecl] = {}
+        self.funcs: dict[str, Func] = {}
         # name -> (type, is_mut)
         self.scope: dict[str, tuple[str, bool]] = {}
         self.loop_depth = 0
+        self.current_ret: Optional[str] = None  # enclosing function's return type
 
-    def run(self) -> Func:
+    def run(self) -> None:
         self.collect_structs()
-        return self.check_main()
+        self.collect_functions()
+        for fn in self.program.funcs:
+            self.check_func(fn)
 
     def collect_structs(self) -> None:
         for decl in self.program.structs:
@@ -943,22 +972,42 @@ class Checker:
                     "struct field types must be numeric, `bool`, `str`, or `[]u8`",
                 )
 
-    def check_main(self) -> Func:
-        main: Optional[Func] = None
+    def collect_functions(self) -> None:
         for fn in self.program.funcs:
-            if fn.name == "main":
-                main = fn
-            else:
+            if fn.name in PRELUDE_FUNCS or fn.name in CONSTRUCTOR_NAMES:
                 raise Diagnostic(
                     "CRX0015",
-                    f"only `main` is supported yet (found function `{fn.name}`)",
+                    f"`{fn.name}` is a built-in name and cannot be redefined",
                     self.path,
                     fn.line,
                     fn.col,
-                    "the current milestones compile a single `fn main() -> i32`",
                 )
+            if fn.name in self.funcs:
+                raise Diagnostic(
+                    "CRX0047",
+                    f"duplicate function `{fn.name}`",
+                    self.path,
+                    fn.line,
+                    fn.col,
+                    "each function name must be unique (no overloading)",
+                )
+            seen: set[str] = set()
+            for p in fn.params:
+                self.resolve_type(p.type_name, p.line, p.col)
+                if p.name in seen:
+                    raise Diagnostic(
+                        "CRX0020",
+                        f"duplicate parameter `{p.name}` in `{fn.name}`",
+                        self.path,
+                        p.line,
+                        p.col,
+                    )
+                seen.add(p.name)
+            if fn.ret_type is not None:
+                self.resolve_type(fn.ret_type, fn.line, fn.col)
+            self.funcs[fn.name] = fn
 
-        if main is None:
+        if "main" not in self.funcs:
             last = self.program.funcs[-1] if self.program.funcs else None
             line = last.line if last else 1
             col = last.col if last else 1
@@ -970,28 +1019,33 @@ class Checker:
                 col,
                 "add `fn main() -> i32 { ... }`",
             )
-
-        if main.ret_type != I32:
+        main = self.funcs["main"]
+        if main.ret_type != I32 or main.params:
             raise Diagnostic(
                 "CRX0011",
                 "`main` must have signature `fn main() -> i32`",
                 self.path,
                 main.line,
                 main.col,
-                "change the return type to `-> i32`",
+                "`main` takes no parameters and returns `i32`",
             )
 
-        self.check_block(main.body)
-        if not block_returns(main.body):
+    def check_func(self, fn: Func) -> None:
+        self.scope = {}
+        self.loop_depth = 0
+        self.current_ret = fn.ret_type
+        for p in fn.params:
+            self.scope[p.name] = (p.type_name, False)  # parameters are immutable
+        self.check_block(fn.body)
+        if fn.ret_type is not None and not block_returns(fn.body):
             raise Diagnostic(
                 "CRX0011",
-                "`main` must return an `i32` on every path",
+                f"function `{fn.name}` must return `{fn.ret_type}` on every path",
                 self.path,
-                main.line,
-                main.col,
-                "add a `return` (e.g. `return 0;`)",
+                fn.line,
+                fn.col,
+                "add a `return`",
             )
-        return main
 
     def check_block(self, stmts: list[Node]) -> None:
         # Block scoping: bindings introduced here do not escape the block.
@@ -1145,20 +1199,27 @@ class Checker:
         self.scope[stmt.name] = (declared, stmt.is_mut)
 
     def check_return(self, stmt: Return) -> None:
-        # `main` returns i32 in every implemented milestone.
-        self.check(stmt.value, I32)
+        if self.current_ret is None:
+            raise Diagnostic(
+                "CRX0014",
+                "cannot return a value from a function with no return type",
+                self.path,
+                stmt.value.line,
+                stmt.value.col,
+            )
+        self.check(stmt.value, self.current_ret)
 
     def check_expr_stmt(self, stmt: ExprStmt) -> None:
         expr = stmt.expr
         if not isinstance(expr, Call):
             raise Diagnostic(
                 "CRX0015",
-                "only `println(...)` calls are supported as bare statements",
+                "only call statements are supported as bare statements",
                 self.path,
                 expr.line,
                 expr.col,
             )
-        self.check_println(expr)
+        self.synth_call(expr)  # type-check the call; its result is discarded
 
     def check_println(self, call: Call) -> None:
         if call.callee != "println":
@@ -1398,11 +1459,49 @@ class Checker:
                 expr.col,
                 f"give it an expected `{need}` type, e.g. via a `let` annotation",
             )
+        if isinstance(expr, TryExpr):
+            return self.synth_try(expr)
         if isinstance(expr, Call):
             return self.synth_call(expr)
         raise Diagnostic(  # pragma: no cover
             "CRX0015", "unsupported expression", self.path, expr.line, expr.col
         )
+
+    def synth_try(self, expr: TryExpr) -> str:
+        inner_type = self.synth(expr.inner)
+        if not is_result(inner_type):
+            raise Diagnostic(
+                "CRX0044",
+                f"the `?` operator requires a `Result<T, E>`, found `{inner_type}`",
+                self.path,
+                expr.line,
+                expr.col,
+                "`?` is not supported on `Option` or non-`Result` values",
+            )
+        if self.current_ret is None or not is_result(self.current_ret):
+            raise Diagnostic(
+                "CRX0045",
+                "the `?` operator requires the enclosing function to return "
+                "`Result<U, E>`",
+                self.path,
+                expr.line,
+                expr.col,
+                "`?` cannot be used in `main() -> i32`",
+            )
+        ok_t, e_expr = result_inner(inner_type)
+        _, e_fn = result_inner(self.current_ret)
+        if e_expr != e_fn:
+            raise Diagnostic(
+                "CRX0046",
+                f"`?` error type `{e_expr}` does not match the function's error "
+                f"type `{e_fn}`",
+                self.path,
+                expr.line,
+                expr.col,
+                "there is no implicit error conversion in v0.1",
+            )
+        expr.inner_type = inner_type  # type: ignore[attr-defined]  # for the emitter
+        return ok_t
 
     def _constructor_name(self, expr: Node) -> str:
         return {
@@ -1457,9 +1556,35 @@ class Checker:
                 )
             call.arg_type = arg_type  # type: ignore[attr-defined]
             return payload
-        # Not an inspector: fall back to println handling (which rejects others).
-        self.check_println(call)
-        return UNIT
+        if call.callee == "println":
+            self.check_println(call)
+            return UNIT
+        if call.callee in self.funcs:
+            return self.check_user_call(call)
+        raise Diagnostic(
+            "CRX0012",
+            f"unknown function `{call.callee}`",
+            self.path,
+            call.line,
+            call.col,
+            "no such function or built-in",
+        )
+
+    def check_user_call(self, call: Call) -> str:
+        fn = self.funcs[call.callee]
+        if len(call.args) != len(fn.params):
+            raise Diagnostic(
+                "CRX0013",
+                f"`{call.callee}` takes {len(fn.params)} argument(s) but "
+                f"{len(call.args)} were given",
+                self.path,
+                call.line,
+                call.col,
+            )
+        for arg, param in zip(call.args, fn.params):
+            self.check(arg, param.type_name)
+        call.param_types = [p.type_name for p in fn.params]  # type: ignore[attr-defined]
+        return fn.ret_type if fn.ret_type is not None else UNIT
 
     def _single_arg(self, call: Call) -> Node:
         if len(call.args) != 1:
@@ -1883,9 +2008,8 @@ def c_string_literal(value: str) -> str:
 
 
 class Emitter:
-    def __init__(self, program: Program, main: Func, source_path: str) -> None:
+    def __init__(self, program: Program, source_path: str) -> None:
         self.program = program
-        self.main = main
         self.source_path = source_path
         self.includes: set[str] = set()
         self.helpers: set[tuple[str, str]] = set()  # (op, type)
@@ -1895,6 +2019,9 @@ class Emitter:
         self.uses_slice_u8 = False
         self.core_types: set[str] = set()  # Option/Result types needing a typedef
         self.unwrap_types: set[str] = set()  # core types needing an unwrap helper
+        self.hoisted: list[str] = []  # statements hoisted before the current one
+        self.tmp_counter = 0
+        self.current_fn_ret: Optional[str] = None  # enclosing function return type
 
     def add_type_include(self, t: str) -> None:
         if t in FIXED_WIDTH:
@@ -1964,9 +2091,30 @@ class Emitter:
             return f"(crx_str){{ {c_string_literal(node.value)}, {str_byte_len(node.value)} }}"
         if isinstance(node, (OkExpr, ErrExpr, SomeExpr, NoneExpr)):
             return self.emit_constructor(node)
+        if isinstance(node, TryExpr):
+            return self.emit_try(node)
         if isinstance(node, Call):
             return self.emit_call(node)
         raise AssertionError(f"cannot emit expression {node!r}")  # pragma: no cover
+
+    def new_temp(self) -> str:
+        self.tmp_counter += 1
+        return f"_crx_t{self.tmp_counter}"
+
+    def emit_try(self, node: TryExpr) -> str:
+        inner_type = node.inner_type  # type: ignore[attr-defined]  # Result<T, E>
+        self.add_type_include(inner_type)
+        inner_c = self.expr(node.inner)  # evaluate once
+        tmp = self.new_temp()
+        self.hoisted.append(f"{c_type(inner_type)} {tmp} = {inner_c};")
+        # On Err, return an Err of the *enclosing function's* Result type.
+        ret_ct = c_type(self.current_fn_ret)  # type: ignore[arg-type]
+        self.add_type_include(self.current_fn_ret)  # type: ignore[arg-type]
+        self.hoisted.append(
+            f"if ({tmp}.tag != 1) "
+            f"return ({ret_ct}){{ .tag = 0, .payload.err = {tmp}.payload.err }};"
+        )
+        return f"{tmp}.payload.ok"
 
     def emit_constructor(self, node: Node) -> str:
         t = node.rtype  # type: ignore[attr-defined]  # set by the checker
@@ -1981,18 +2129,32 @@ class Emitter:
         return f"({ct}){{ .tag = 0 }}"  # NoneExpr (payload zero-initialized)
 
     def emit_call(self, node: Call) -> str:
-        arg = node.args[0]
         if node.callee == "is_ok":
-            return f"({self.expr(arg)}.tag == 1)"
+            return f"({self.expr(node.args[0])}.tag == 1)"
         if node.callee == "is_err":
-            return f"({self.expr(arg)}.tag == 0)"
-        # unwrap
-        t = node.arg_type  # type: ignore[attr-defined]
-        self.add_type_include(t)
-        self.unwrap_types.add(t)
-        self.need_panic = True
-        self.includes |= {"stdio.h", "stdlib.h"}
-        return f"crx_unwrap_{mangle(t)}({self.expr(arg)})"
+            return f"({self.expr(node.args[0])}.tag == 0)"
+        if node.callee == "unwrap":
+            t = node.arg_type  # type: ignore[attr-defined]
+            self.add_type_include(t)
+            self.unwrap_types.add(t)
+            self.need_panic = True
+            self.includes |= {"stdio.h", "stdlib.h"}
+            return f"crx_unwrap_{mangle(t)}({self.expr(node.args[0])})"
+        # A user-defined function call.
+        param_types = node.param_types  # type: ignore[attr-defined]
+        if len(node.args) >= 2:
+            # Hoist each argument into a temp, left-to-right, so evaluation order
+            # is guaranteed regardless of C's unspecified argument order.
+            names = []
+            for arg, pt in zip(node.args, param_types):
+                arg_c = self.expr(arg)
+                tmp = self.new_temp()
+                self.add_type_include(pt)
+                self.hoisted.append(f"{c_type(pt)} {tmp} = {arg_c};")
+                names.append(tmp)
+            return f"{node.callee}({', '.join(names)})"
+        args_c = ", ".join(self.expr(a) for a in node.args)
+        return f"{node.callee}({args_c})"
 
     def _value_preserving(self, src: str, tgt: str) -> bool:
         # `tgt` is signed. The source value always fits the target when widening
@@ -2021,6 +2183,18 @@ class Emitter:
         return f"crx_cast_to_{tgt}(({ut})({inner}))"
 
     def stmt(self, node: Node, indent: int) -> list[str]:
+        # Evaluate the statement, collecting any lines hoisted out of its
+        # expressions (e.g. `?` desugaring, multi-arg call temporaries), and emit
+        # those before the statement itself — preserving left-to-right order.
+        pad = "    " * indent
+        saved = self.hoisted
+        self.hoisted = []
+        lines = self._emit_stmt(node, indent)
+        hoisted = [f"{pad}{h}" for h in self.hoisted]
+        self.hoisted = saved
+        return hoisted + lines
+
+    def _emit_stmt(self, node: Node, indent: int) -> list[str]:
         pad = "    " * indent
         if isinstance(node, Let):
             self.add_type_include(node.declared_type)
@@ -2047,10 +2221,13 @@ class Emitter:
         if isinstance(node, Continue):
             return [f"{pad}continue;"]
         if isinstance(node, ExprStmt) and isinstance(node.expr, Call):
-            self.includes.add("stdio.h")
-            arg = node.expr.args[0]
-            assert isinstance(arg, StrLit)
-            return [f"{pad}puts({c_string_literal(arg.value)});"]
+            call = node.expr
+            if call.callee == "println":
+                self.includes.add("stdio.h")
+                arg = call.args[0]
+                assert isinstance(arg, StrLit)
+                return [f"{pad}puts({c_string_literal(arg.value)});"]
+            return [f"{pad}{self.expr(call)};"]  # call statement, result discarded
         if isinstance(node, If):
             lines = [f"{pad}if ({self.expr(node.cond)}) {{"]
             for s in node.then_branch:
@@ -2063,10 +2240,42 @@ class Emitter:
             return lines
         raise AssertionError(f"cannot emit statement {node!r}")  # pragma: no cover
 
+    def fn_signature(self, fn: Func) -> str:
+        if fn.name == "main":
+            return "int main(void)"
+        ret = "void" if fn.ret_type is None else c_type(fn.ret_type)
+        if fn.params:
+            ps = ", ".join(f"{c_type(p.type_name)} {p.name}" for p in fn.params)
+        else:
+            ps = "void"
+        return f"static {ret} {fn.name}({ps})"
+
     def emit(self) -> str:
-        body_lines: list[str] = []
-        for s in self.main.body:
-            body_lines += self.stmt(s, 1)
+        # Emit each function body first (collecting includes/helpers/typedefs).
+        def_lines: list[str] = []
+        for fn in self.program.funcs:
+            self.current_fn_ret = fn.ret_type
+            self.tmp_counter = 0
+            # `main` is always `int main(void)`; only other signatures use the
+            # mapped C types, so only they drive signature includes.
+            if fn.name != "main":
+                for p in fn.params:
+                    self.add_type_include(p.type_name)
+                if fn.ret_type is not None:
+                    self.add_type_include(fn.ret_type)
+            body: list[str] = []
+            for s in fn.body:
+                body += self.stmt(s, 1)
+            def_lines.append(self.fn_signature(fn) + " {")
+            def_lines += body
+            def_lines += ["}", ""]
+
+        proto_lines: list[str] = []
+        for fn in self.program.funcs:
+            if fn.name != "main":
+                proto_lines.append(self.fn_signature(fn) + ";")
+        if proto_lines:
+            proto_lines.append("")
 
         struct_lines: list[str] = []
         for decl in self.program.structs:
@@ -2118,9 +2327,10 @@ class Emitter:
         lines.extend(struct_lines)
         lines.extend(core_lines)
         lines.extend(unwrap_lines)
-        lines.append("int main(void) {")
-        lines.extend(body_lines)
-        lines.append("}")
+        lines.extend(proto_lines)
+        lines.extend(def_lines)
+        if lines and lines[-1] == "":
+            lines.pop()  # exactly one trailing newline from the join below
         lines.append("")
         return "\n".join(lines)
 
@@ -2135,8 +2345,8 @@ def compile_to_c(path: str) -> str:
         src = fh.read()
     tokens = tokenize(src, path)
     program = Parser(tokens, path).parse_program()
-    main = Checker(program, path).run()
-    return Emitter(program, main, path).emit()
+    Checker(program, path).run()
+    return Emitter(program, path).emit()
 
 
 def fail(diag: Diagnostic) -> NoReturn:

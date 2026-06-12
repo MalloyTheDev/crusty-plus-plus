@@ -210,9 +210,26 @@ negative).
 > `error-handling.md` §1–2) under the user's M3B directive. (2) **Nested core
 > types and core-typed struct fields are deferred** in M3B (CRX0015); the spec
 > grammar admits nesting, so this is a milestone restriction, not a spec change.
-> Agent-1 recommended clarifications applied: `None` context-typing, core-type
-> equality, constructor payload typing. Next: **M3C** (`?` propagation). Specs
-> remain **FREEZE-CANDIDATE**, not FROZEN.
+
+**M3C — `?` propagation + user functions.** ✅ Minimal user-defined functions
+(top-level, explicit-typed params, calls; no defaults/overloading/methods/nested/
+generics) and the `?` operator for `Result`. `?` is valid only on a `Result<T, E>`
+(CRX0044, incl. on `Option`/`i32`) inside a `Result<U, E>`-returning function
+(CRX0045, e.g. in `main`), with the error type `E` matching exactly — no implicit
+conversion (CRX0046). On `Ok` it yields the payload; on `Err` it returns `Err(e)`
+of the function's own return type. Calls check arg count/types exactly (CRX0012/
+0013/0014), no implicit casts; arguments evaluate strictly left-to-right (≥2-arg
+calls hoist temporaries); `?` evaluates its operand once. Duplicate function →
+CRX0047; redefining a built-in name → CRX0015. `main` stays `fn main() -> i32`;
+`main() -> Result` remains **deferred** (`error-handling.md` §6). Lowering: user
+functions → C functions (`static` except `main`) with prototypes first; `?`
+desugars to a temp + early `return Err(...)`. Target `examples/m3c_try_result.crust`
+(`tests/m3c_try_result.py`, exit 0) + `tests/m3c_checks.py` (4 runtime + 1 codegen
+order + 7 negative). Agent 1 applied the spec clarifications (`error-handling.md`
+§3, `v0.1.md` §2.4/§4).
+
+> Next: **M3D** (`read_all_bytes` + `file_read.crust`). Specs remain
+> **FREEZE-CANDIDATE**, not FROZEN.
 
 Subsequent milestones (M2 structs + arithmetic + literal typing; M3 slices +
 `Result` + `?` + prelude → `file_read.crust`/`crust_inspect.crust`) proceed as

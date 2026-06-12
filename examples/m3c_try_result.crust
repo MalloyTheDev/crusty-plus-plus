@@ -1,0 +1,48 @@
+// m3c_try_result.crust
+//
+// M3C target: the `?` error-propagation operator inside user-defined functions
+// that return `Result<U, E>`. `?` is Result-only and not allowed in
+// `main() -> i32`, so main inspects results with `is_ok`/`is_err`/`unwrap`.
+//
+// Returns 0 on success.
+
+// Returns Err(x) for negative inputs, otherwise Ok(x).
+fn may_fail(x: i32) -> Result<i32, i32> {
+    if x < 0 {
+        return Err(x);
+    }
+    return Ok(x);
+}
+
+// Uses `?`: if may_fail returns Err, this function returns that Err immediately;
+// otherwise the Ok payload flows on. Error types match exactly (both i32).
+fn parse_value(x: i32) -> Result<i32, i32> {
+    let y: i32 = may_fail(x)?;          // Ok -> payload; Err -> early return
+    let z: i32 = may_fail(y + 1)?;      // chained `?`
+    return Ok(z);
+}
+
+// A second Result-returning function with a usize Ok type, also using `?`.
+fn checked_len(s: str) -> Result<usize, i32> {
+    let n: usize = ok_len(s)?;
+    return Ok(n);
+}
+
+fn ok_len(s: str) -> Result<usize, i32> {
+    return Ok(s.len);
+}
+
+fn main() -> i32 {
+    // Ok path: parse_value(10) -> Ok(11).
+    let good: Result<i32, i32> = parse_value(10);
+    // Err path: parse_value(-1) -> Err(-1), inspected without `?` in main.
+    let bad: Result<i32, i32> = parse_value(-1);
+    let len_r: Result<usize, i32> = checked_len("abcd");
+
+    let mut result: i32 = 0;
+    if is_ok(good) { } else { result = 1; }
+    if is_err(bad) { } else { result = 1; }
+    if unwrap(good) == 11 { } else { result = 1; }
+    if unwrap(len_r) == 4 { } else { result = 1; }
+    return result;
+}

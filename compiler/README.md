@@ -2,8 +2,9 @@
 
 Home of `crustc`, the CRusty++ reference compiler.
 
-**Status: milestones M1 + M2A + M2B + M2C + M2D + M2E + M3A + M3B implemented.**
-`crustc.py` compiles the strict M1–M3B subset end-to-end to portable C:
+**Status: milestones M1 + M2A + M2B + M2C + M2D + M2E + M3A + M3B + M3C
+implemented.** `crustc.py` compiles the strict M1–M3C subset end-to-end to
+portable C:
 
 - **M1** — [`../examples/hello.crust`](../examples/hello.crust): `println` + `i32`
   return.
@@ -26,6 +27,9 @@ Home of `crustc`, the CRusty++ reference compiler.
 - **M3B** — [`../examples/m3b_result_option.crust`](../examples/m3b_result_option.crust):
   the built-in core types `Result<T, E>` and `Option<T>` with constructors
   `Ok`/`Err`/`Some`/`None` and inspectors `is_ok`/`is_err`/`unwrap`.
+- **M3C** — [`../examples/m3c_try_result.crust`](../examples/m3c_try_result.crust):
+  user-defined functions (parameters + calls) and the `?` error-propagation
+  operator for `Result` inside `Result`-returning functions.
 
 Everything beyond this subset is intentionally rejected with a diagnostic, not
 parsed — the compiler never accepts more than the spec defines.
@@ -38,14 +42,15 @@ parsed — the compiler never accepts more than the spec defines.
 
 ```sh
 # Emit C to stdout / file, build, build-and-run:
-python3 compiler/crustc.py examples/m3b_result_option.crust
-python3 compiler/crustc.py examples/m3b_result_option.crust --emit-c build/m3b.c
-python3 compiler/crustc.py examples/m3b_result_option.crust --run
+python3 compiler/crustc.py examples/m3c_try_result.crust
+python3 compiler/crustc.py examples/m3c_try_result.crust --emit-c build/m3c.c
+python3 compiler/crustc.py examples/m3c_try_result.crust --run
 
 # Acceptance + behavior + diagnostic checks:
 for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops \
          m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks \
-         m3a_slices m3a_checks m3b_result_option m3b_checks; do
+         m3a_slices m3a_checks m3b_result_option m3b_checks \
+         m3c_try_result m3c_checks; do
     python3 tests/$t.py || break
 done
 ```
@@ -53,12 +58,14 @@ done
 ## Grammar (exactly what `crustc` accepts today)
 
 ```
-program     = item+                           ; must contain exactly `main`
+program     = item+                           ; must contain `fn main() -> i32`
 item        = struct_decl | function
 struct_decl = "struct" ident "{" sfields? "}"
 sfields     = sfield ("," sfield)* ","?
-sfield      = ident ":" type                  ; field types: numeric or bool
-function    = "fn" "main" "(" ")" "->" "i32" block
+sfield      = ident ":" type                  ; field types: numeric, bool, slice
+function    = "fn" ident "(" params? ")" ("->" type)? block
+params      = param ("," param)* ","?
+param       = ident ":" type
 block       = "{" statement* "}"
 statement   = let_stmt | assign_stmt | return_stmt | if_stmt
             | while_stmt | loop_stmt | "break" ";" | "continue" ";" | call_stmt
@@ -76,12 +83,14 @@ add         = mul (("+" | "-") mul)*
 mul         = cast (("*" | "/") cast)*
 cast        = unary ("as" type)*              ; explicit numeric cast
 unary       = "-" unary | postfix
-postfix     = primary ("." ident)*            ; field access
+postfix     = primary ("." ident | "?")*      ; field access / `?` propagation
 primary     = int_lit | string_lit | "(" expr ")"
             | ident                            ; variable
+            | ident "(" args? ")"              ; call (user fn / builtin)
             | ident "{" finits? "}"            ; struct literal (not in a condition)
             | ("Ok" | "Err" | "Some") "(" expr ")"   ; core-type constructors
             | "None"
+args        = expr ("," expr)* ","?
 finits      = ident ":" expr ("," ident ":" expr)* ","?
 type        = numeric_type | "bool" | "str" | "[" "]" "u8"
             | core_type | <declared struct name>
@@ -102,12 +111,13 @@ assignment); `break`/`continue` are valid only inside a loop.
 binary operators**: `-x as T` is `(-x) as T`; `a as T + b` is `(a as T) + b`.
 Casts are left-associative. Parenthesize for any other grouping.
 
-This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). Function
-parameters, `%`, `&& || !`, field assignment, indexing/slicing expressions, array
-literals, `?`, file I/O, nested/struct-field core types, struct-typed fields, and
-any function other than `main` are **rejected** (see Diagnostics). They arrive in
-later milestones (see [`../spec/freeze-checklist.md`](../spec/freeze-checklist.md)
-and the M3C recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
+This is a strict subset of [`../spec/syntax.md`](../spec/syntax.md). `%`, `&& ||
+!`, field assignment, indexing/slicing expressions, array literals, file I/O,
+`?` on `Option`, `main() -> Result`, nested/struct-field core types, struct-typed
+fields, default/variadic parameters, overloading, and methods are **rejected**
+(see Diagnostics). They arrive in later milestones (see
+[`../spec/freeze-checklist.md`](../spec/freeze-checklist.md) and the M3D
+recommendation in [`../ROADMAP.md`](../ROADMAP.md)).
 
 ## Casts (M2E)
 
@@ -209,6 +219,37 @@ field. The slice typedefs are emitted before any user struct that embeds them.
   `crx_unwrap_<type>` helper. Core typedefs are emitted after slices and user
   structs (their payloads may be either); unwrap helpers after the typedefs.
 
+## Functions and `?` (M3C)
+
+- **User functions:** `fn name(p: Type, ...) -> Type { ... }`. No defaults, no
+  overloading, no methods, no nested functions, no generics. `main` stays
+  `fn main() -> i32` (and `main() -> Result<...>` is deferred). Parameters are
+  immutable bindings.
+- **Calls:** by name; the **argument count and each argument type must match
+  exactly** (no implicit cast — use `as`). Unknown function → `CRX0012`; wrong
+  count → `CRX0013`; wrong type → `CRX0014`; duplicate function → `CRX0047`;
+  redefining a built-in name (`println`, `unwrap`, `Ok`, …) → `CRX0015`.
+  Arguments are evaluated **strictly left-to-right** (see below).
+- **`?` (Result only):** `expr?` requires `expr` to be a `Result<T, E>`
+  (`CRX0044` otherwise — including on `Option`/`i32`) inside a function whose
+  return type is `Result<U, E>` (`CRX0045` otherwise, e.g. in `main`). The error
+  type `E` must match the enclosing function's exactly — no implicit conversion
+  (`CRX0046`). On `Ok(v)`, `expr?` is `v`; on `Err(e)`, the function immediately
+  returns `Err(e)` (an `Err` of its own return type). `?` is **not** on `Option`.
+
+**Lowering.** A user function → a C function (`static`, except `main`); prototypes
+are emitted before definitions so call order is free. `expr?` desugars to
+statements hoisted before the enclosing statement:
+```c
+<Result-C-type> _crx_tN = <expr>;          /* evaluated once */
+if (_crx_tN.tag != 1)
+    return (<fn-return-C-type>){ .tag = 0, .payload.err = _crx_tN.payload.err };
+/* ... and `expr?` becomes `_crx_tN.payload.ok` */
+```
+**Strict left-to-right** is preserved: a call with ≥2 arguments hoists each
+argument into a temporary in order (C leaves argument order unspecified), and `?`
+evaluates its operand exactly once into a temporary — no double evaluation.
+
 ## Checked arithmetic
 
 `+ - * /` and unary `-` lower to per-type runtime helpers
@@ -276,6 +317,10 @@ C source  →  system C compiler  →  executable
 | `CRX0041` | user-defined generic type (only built-in `Option`/`Result`) |
 | `CRX0042` | constructor used where a non-matching type is expected |
 | `CRX0043` | inspector (`is_ok`/`is_err`/`unwrap`) given a wrong argument type |
+| `CRX0044` | `?` on a non-`Result` expression (incl. `Option`) |
+| `CRX0045` | `?` outside a `Result`-returning function (e.g. in `main`) |
+| `CRX0046` | `?` error type does not match the function's error type |
+| `CRX0047` | duplicate function definition |
 
 ---
 

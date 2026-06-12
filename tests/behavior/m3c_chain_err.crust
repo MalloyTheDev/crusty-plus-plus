@@ -1,0 +1,16 @@
+// Chained `?` stops at the FIRST Err: `crash()` (which would panic) is never
+// reached, so the program exits 0 rather than 101.
+fn boom(x: i32) -> Result<i32, i32> { return Err(x); }
+fn crash() -> Result<i32, i32> {
+    let z: i32 = 0;
+    return Ok(1 / z);        // would panic (exit 101) if ever evaluated
+}
+fn chain() -> Result<i32, i32> {
+    let a: i32 = boom(7)?;   // first `?` -> returns Err(7) immediately
+    let b: i32 = crash()?;   // never reached
+    return Ok(a + b);
+}
+fn main() -> i32 {
+    let r: Result<i32, i32> = chain();
+    if is_err(r) { return 0; } else { return 1; }
+}

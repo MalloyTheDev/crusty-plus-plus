@@ -14,6 +14,7 @@ Acceptance tests (compile → build → run → assert golden C + exit code):
 - [`m2e_casts.py`](./m2e_casts.py) — `m2e_casts.crust`; exit `0`.
 - [`m3a_slices.py`](./m3a_slices.py) — `m3a_slices.crust`; exit `0`.
 - [`m3b_result_option.py`](./m3b_result_option.py) — `m3b_result_option.crust`; exit `0`.
+- [`m3c_try_result.py`](./m3c_try_result.py) — `m3c_try_result.crust`; exit `0`.
 
 Behavior tests (runtime exit-code assertions):
 
@@ -46,6 +47,12 @@ Diagnostic + control-flow + numeric tests:
   `0`), and `unwrap(Err)` / `unwrap(None)` (exit `101`); and negative compile
   cases malformed `Result<>`/`Option<>` (`CRX0003`), user generic (`CRX0041`),
   `None`/`Ok`/`Some` against a non-matching expected type (`CRX0042`).
+- [`m3c_checks.py`](./m3c_checks.py) — four `?`/function runtime programs (exit
+  `0`): `?` Ok passthrough, `?` Err short-circuit, chained `?` stops at the first
+  Err (no panic), and a 2-arg call; plus a codegen check that arguments are
+  hoisted left-to-right; and negative compile cases `?` in `main` (`CRX0045`),
+  `?` on `Option`/`i32` (`CRX0044`), `?` Err-type mismatch (`CRX0046`), unknown
+  function (`CRX0012`), wrong arg count (`CRX0013`), wrong arg type (`CRX0014`).
 
 Goldens live in [`golden/`](./golden/) (one `.c` per acceptance example) for the
 codegen stability checks.
@@ -55,7 +62,8 @@ Run them all:
 ```sh
 for t in m1_hello m2a_structs m2b_checked_if m2b_behavior m2c_loops \
          m2c_diagnostics m2d_numeric m2d_checks m2e_casts m2e_checks \
-         m3a_slices m3a_checks m3b_result_option m3b_checks; do
+         m3a_slices m3a_checks m3b_result_option m3b_checks \
+         m3c_try_result m3c_checks; do
     python3 tests/$t.py || break
 done
 ```

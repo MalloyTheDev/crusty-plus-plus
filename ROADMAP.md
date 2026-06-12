@@ -53,7 +53,10 @@ conform. **No compiler code is written before this phase closes.**
       `Option<T>` with constructors `Ok`/`Err`/`Some`/`None` and inspectors
       `is_ok`/`is_err`/`unwrap` (no `?`) → `examples/m3b_result_option.crust`;
       `tests/m3b_result_option.py` and `tests/m3b_checks.py` pass.
-- [ ] M3C — `?` propagation.
+- [x] **M3C — `?` propagation.** User-defined functions (params + calls) and the
+      `?` operator for `Result` inside `Result`-returning functions (not in
+      `main() -> i32`) → `examples/m3c_try_result.crust`;
+      `tests/m3c_try_result.py` and `tests/m3c_checks.py` pass.
 - [ ] M3D — prelude `read_all_bytes` + `file_read.crust`.
 - [ ] M3E — `crust_inspect.crust`.
 - [ ] Type checker for the full `v0.1` type set
